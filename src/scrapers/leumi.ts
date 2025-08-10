@@ -1,11 +1,11 @@
 import moment, { type Moment } from 'moment';
-import { type Page } from 'puppeteer';
-import { SHEKEL_CURRENCY } from '../constants';
+import { type HTTPResponse, type Page } from 'puppeteer';
+import { DOLLAR_CURRENCY, SHEKEL_CURRENCY } from '../constants';
 import { getDebug } from '../helpers/debug';
 import { clickButton, fillInput, pageEval, pageEvalAll, waitUntilElementFound } from '../helpers/elements-interactions';
 import { waitForNavigation } from '../helpers/navigation';
 import { TransactionStatuses, TransactionTypes, type Transaction, type TransactionsAccount } from '../transactions';
-import { type Investment } from '../investments';
+import { type Investment, type Portfolio } from '../investments';
 import { BaseScraperWithBrowser, LoginResults, type LoginOptions } from './base-scraper-with-browser';
 import { type ScraperScrapingResult } from './interface';
 
@@ -14,7 +14,8 @@ const BASE_URL = 'https://hb2.bankleumi.co.il';
 const LOGIN_URL = 'https://www.leumi.co.il/';
 const TRANSACTIONS_URL = `${BASE_URL}/eBanking/SO/SPA.aspx#/ts/BusinessAccountTrx?WidgetPar=1`;
 const FILTERED_TRANSACTIONS_URL = `${BASE_URL}/ChannelWCF/Broker.svc/ProcessRequest?moduleName=UC_SO_27_GetBusinessAccountTrx`;
-const LEUMI_TRADING_URL = `${BASE_URL}/lti/lti-app/home`;
+const LEUMI_TRADING_URL = `${BASE_URL}/lti/lti-app/trade/portfolio`;
+const LEUMI_FOREIGN_TRANSACTIONS_URL = `${BASE_URL}/eBanking/ForeignCurrency/DisplayForeignAccountsActivity.aspx`;
 
 const DATE_FORMAT = 'DD.MM.YY';
 const ACCOUNT_BLOCKED_MSG = 'המנוי חסום';
@@ -212,6 +213,190 @@ async function waitForPostLogin(page: Page): Promise<void> {
 
 type ScraperSpecificCredentials = { username: string; password: string };
 
+function extractPortfolios(response: HTTPResponse, portfolios: Portfolio[]) {
+  response
+    .json()
+    .then(data => {
+      debug('Portfolio data received:', data);
+
+      const portfoliosData = data?.data.user?.Portfolios;
+      debug('Portfolios:', portfoliosData);
+
+      for (const item of portfoliosData) {
+        const portfolio: Portfolio = {
+          portfolioId: item.PortfolioId,
+          portfolioName: item.PortfolioName,
+          investments: [],
+        };
+
+        portfolios.push(portfolio);
+      }
+    })
+    .catch(error => {
+      debug('Error parsing response JSON:', error);
+    });
+}
+
+function extractPortfolioInvestments(response: HTTPResponse, investments: Investment[]) {
+  response
+    .json()
+    .then(data => {
+      debug('Investment data received:', data);
+
+      const userStatement = data?.data.UserStatement?.DataSource;
+      debug('User statement:', userStatement);
+
+      for (const item of userStatement) {
+        const investment: Investment = {
+          paperId: item.PaperId,
+          paperName: item.PaperName,
+          symbol: item.Symbol,
+          amount: parseFloat(item.Amount),
+          value: parseFloat(item.Value),
+          currency: SHEKEL_CURRENCY,
+        };
+
+        investments.push(investment);
+      }
+    })
+    .catch(error => {
+      debug('Error parsing response JSON:', error);
+    });
+}
+
+function mapCurrency(raw: string): string {
+  if (raw == "דולר ארה''ב") {
+    return DOLLAR_CURRENCY;
+  }
+
+  return SHEKEL_CURRENCY;
+}
+
+function cellTextToISODate(cellText: string): string {
+  try {
+    const parts = cellText.split('/');
+    const day = parseInt(parts[0], 10);
+    const month = parseInt(parts[1], 10) - 1; // Month is 0-indexed
+    let year = parseInt(parts[2], 10);
+
+    // Handle two-digit year (yy)
+    // This assumes years like '25' are 2025 and '98' are 1998
+    if (year < 100) {
+      year += year > 70 ? 1900 : 2000;
+    }
+
+    const date = new Date(year, month, day);
+    return date.toISOString();
+  } catch (error) {
+    console.error(`Error parsing date ${cellText}:`, error);
+    return '';
+  }
+}
+
+function cellTextToNumber(cellText: string): number {
+  return parseFloat(cellText?.replace(/,/g, '') || '0');
+}
+
+function getForeignTransactionAmount(debitCellText: string, creditCellText: string): number {
+  const debit = cellTextToNumber(debitCellText);
+  const credit = cellTextToNumber(creditCellText);
+
+  if (credit > 0) {
+    return credit;
+  }
+
+  return -debit;
+}
+
+function mapForeignTransaction(raw: any, currency: string): Transaction {
+  const date = cellTextToISODate(raw[0]);
+
+  const amount = getForeignTransactionAmount(raw[3], raw[4]);
+  // const balance = cellTextToNumber(raw[5]);
+
+  return {
+    type: TransactionTypes.Normal,
+    date: date,
+    processedDate: date,
+    identifier: raw[2],
+    originalAmount: amount,
+    chargedAmount: amount,
+    description: raw[1],
+    originalCurrency: currency,
+    status: TransactionStatuses.Completed,
+  };
+}
+
+async function fetchForeignTransactionsForAccount(
+  page: Page,
+  startDate: Moment,
+  account: any,
+): Promise<TransactionsAccount> {
+  const currencyText = (await page.$eval('#lblCurrencyVal', node => (node as HTMLElement).innerText.trim())) || '';
+  const currency = mapCurrency(currencyText);
+
+  await page.select('#ddlAccounts_m_ddl', account.value);
+  debug(`Selected foreign account: ${account.text}`);
+
+  await page.select('#ddlTransactionPeriod', '3');
+  debug('Selected transaction period: dates');
+
+  await fillInput(page, '#dtFromDate_textBox', startDate.format(DATE_FORMAT));
+  debug(`Filled from date: ${startDate.format(DATE_FORMAT)}`);
+
+  await clickButton(page, '#btnDisplayDates');
+  debug('Submitted date selection');
+
+  await waitUntilElementFound(page, '#ctlActivityTable', true);
+  await hangProcess(5000);
+
+  const rows = await page.$$eval('#ctlActivityTable tr:not(.header)', trs =>
+    Array.from(trs, tr => {
+      const columns = tr.querySelectorAll('td');
+      return Array.from(columns, column => column?.innerText.trim() || '');
+    }),
+  );
+
+  return {
+    accountNumber: removeSpecialCharacters(account.text),
+    balance: 1234,
+    txns: rows.map(raw => mapForeignTransaction(raw, currency)),
+  };
+}
+
+async function fetchForeignTransactions(page: Page, startDate: Moment): Promise<TransactionsAccount[]> {
+  const accounts: TransactionsAccount[] = [];
+
+  await page.goto(LEUMI_FOREIGN_TRANSACTIONS_URL, { waitUntil: 'networkidle2' });
+
+  // DEVELOPER NOTICE the account number received from the server is being altered at
+  // runtime for some accounts after 1-2 seconds so we need to hang the process for a short while.
+  await hangProcess(4000);
+
+  await waitUntilElementFound(page, '#ddlAccounts_m_ddl', true);
+  // const accountIds = await page.evaluate(() =>
+  //   Array.from(document.querySelectorAll('#ddlAccounts_m_ddl option'), e => ({ value: e.value, text: e.text })),
+  // );
+
+  const accountIds = await page.$$eval('#ddlAccounts_m_ddl option', options =>
+    Array.from(options, option => ({ value: option.value, text: option.text })),
+  );
+
+  await hangProcess(6000);
+
+  debug('Foreign accounts:', accountIds);
+
+  await Promise.all(
+    accountIds.map(async account => {
+      accounts.push(await fetchForeignTransactionsForAccount(page, startDate, account));
+    }),
+  );
+
+  console.log('Foreign accounts fetched:', JSON.stringify(accounts, null, 2));
+
+  return accounts;
+}
+
 class LeumiScraper extends BaseScraperWithBrowser<ScraperSpecificCredentials> {
   getLoginOptions(credentials: ScraperSpecificCredentials) {
     return {
@@ -234,15 +419,17 @@ class LeumiScraper extends BaseScraperWithBrowser<ScraperSpecificCredentials> {
 
     const accounts = await fetchTransactions(this.page, startMoment);
     const investments = await this.fetchInvestments();
+    const foreignTransactions = await fetchForeignTransactions(this.page, startMoment);
 
     return {
       success: true,
       accounts,
-      investments,
+      portfolios: investments,
+      foreignCurrencyAccounts: foreignTransactions,
     };
   }
 
-  async fetchInvestments(): Promise<Investment[]> {
+  async fetchInvestments(): Promise<Portfolio[]> {
     await this.page.setRequestInterception(true);
 
     this.page.on('request', request => {
@@ -252,6 +439,7 @@ class LeumiScraper extends BaseScraperWithBrowser<ScraperSpecificCredentials> {
     });
 
     const investments: Investment[] = [];
+    const portfolios: Portfolio[] = [];
 
     this.page.on('response', response => {
       // You can filter responses based on criteria like URL, method, or resource type.
@@ -260,41 +448,27 @@ class LeumiScraper extends BaseScraperWithBrowser<ScraperSpecificCredentials> {
         return;
       }
 
-      if (!response.url().includes('Statement')) {
+      if (response.url().includes('Statement')) {
+        extractPortfolioInvestments(response, investments);
         return;
       }
 
-      response
-        .json()
-        .then(data => {
-          debug('Investment data received:', data);
+      if (response.url().includes('lti-app/api/config')) {
+        extractPortfolios(response, portfolios);
+        return;
+      }
 
-          const userStatement = data?.data.UserStatement?.DataSource;
-          debug('User statement:', userStatement);
-
-          for (const item of userStatement) {
-            const investment: Investment = {
-              paperId: item.PaperId,
-              paperName: item.PaperName,
-              symbol: item.Symbol,
-              amount: parseFloat(item.Amount),
-              value: parseFloat(item.Value),
-              currency: SHEKEL_CURRENCY,
-            };
-
-            investments.push(investment);
-          }
-        })
-        .catch(error => {
-          debug('Error parsing response JSON:', error);
-        });
+      return;
     });
 
     await this.navigateTo(LEUMI_TRADING_URL);
 
-    await this.page.waitForSelector('currentStockInfoShort', { visible: true });
+    await this.page.waitForSelector('.portfolio-tbl-sticky-native', { visible: true });
+    await hangProcess(5000); // Wait for the investments data to load
 
-    return investments;
+    portfolios[0].investments = investments;
+
+    return portfolios;
   }
 }
 
