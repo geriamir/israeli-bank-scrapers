@@ -171,6 +171,7 @@ export interface ScraperScrapingResult {
   errorType?: ScraperErrorTypes;
   errorMessage?: string; // only on success=false
   portfolios?: Portfolio[];
+  foreignCurrencyAccounts: TransactionsAccount[];
 }
 
 export interface Scraper<TCredentials extends ScraperCredentials> {
