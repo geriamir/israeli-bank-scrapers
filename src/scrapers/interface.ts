@@ -1,6 +1,6 @@
 import { type BrowserContext, type Browser, type Page } from 'puppeteer';
 import { type CompanyTypes, type ScraperProgressTypes } from '../definitions';
-import { type TransactionsAccount } from '../transactions';
+import { type TransactionsForeignAccount, type TransactionsAccount } from '../transactions';
 import { type ErrorResult, type ScraperErrorTypes } from './errors';
 import { type Portfolio } from '../investments';
 
@@ -171,7 +171,7 @@ export interface ScraperScrapingResult {
   errorType?: ScraperErrorTypes;
   errorMessage?: string; // only on success=false
   portfolios?: Portfolio[];
-  foreignCurrencyAccounts: TransactionsAccount[];
+  foreignCurrencyAccounts?: TransactionsForeignAccount[];
 }
 
 export interface Scraper<TCredentials extends ScraperCredentials> {

@@ -50,3 +50,10 @@ export interface Transaction {
   installments?: TransactionInstallments;
   category?: string;
 }
+
+export interface TransactionsForeignAccount extends TransactionsAccount {
+  /**
+   * the currency of the account
+   */
+  currency: string;
+}
