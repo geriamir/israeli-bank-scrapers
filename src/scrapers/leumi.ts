@@ -401,9 +401,13 @@ async function fetchForeignTransactionsForAccount(
   const currencyText = (await page.$eval('#lblCurrencyVal', node => (node as HTMLElement).innerText.trim())) || '';
   const currency = mapCurrency(currencyText);
 
-  const balance = parseFloat(
-    (await page.$eval('#lblOpeningBalanceVal', node => (node as HTMLElement).innerText.trim())) || '0',
-  );
+  const balance =
+    parseFloat(
+      (await page.$eval('#lblOpeningBalanceVal', node => (node as HTMLElement).innerText.trim())).replace(
+        /[^\d\.\-]/g,
+        '',
+      ),
+    ) || 0;
 
   await page.select('#ddlAccounts_m_ddl', account.value);
   debug(`Selected foreign account: ${account.text}`);
