@@ -164,21 +164,37 @@ export interface OutputDataOptions {
   enableTransactionsFilterByDate?: boolean;
 }
 
-export interface ScraperScrapingResult {
+interface ScraperCommonResults {
   success: boolean;
-  accounts?: TransactionsAccount[];
-  futureDebits?: FutureDebit[];
   errorType?: ScraperErrorTypes;
   errorMessage?: string; // only on success=false
+}
+
+export interface ScraperScrapingResult extends ScraperCommonResults {
+  accounts?: TransactionsAccount[];
+  futureDebits?: FutureDebit[];
+}
+
+export interface PortfolioScrapingResult extends ScraperCommonResults {
   portfolios?: Portfolio[];
+}
+
+export interface ForeignCurrencyAccountsScrapingResult extends ScraperCommonResults {
   foreignCurrencyAccounts?: TransactionsForeignAccount[];
 }
 
 export interface Scraper<TCredentials extends ScraperCredentials> {
+  doesSupportTransactions(): boolean;
+  doesSupportPortfolios(): boolean;
+  doesSupportForeignCurrencyAccounts(): boolean;
+
   scrape(credentials: TCredentials): Promise<ScraperScrapingResult>;
   onProgress(func: (companyId: CompanyTypes, payload: { type: ScraperProgressTypes }) => void): void;
   triggerTwoFactorAuth(phoneNumber: string): Promise<ScraperTwoFactorAuthTriggerResult>;
   getLongTermTwoFactorToken(otpCode: string): Promise<ScraperGetLongTermTwoFactorTokenResult>;
+
+  scrapePortfolios(credentials: TCredentials): Promise<PortfolioScrapingResult>;
+  scrapeForeignCurrencyAccounts(credentials: TCredentials): Promise<ForeignCurrencyAccountsScrapingResult>;
 }
 
 export type ScraperTwoFactorAuthTriggerResult =

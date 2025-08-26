@@ -4,6 +4,8 @@ import { type CompanyTypes, ScraperProgressTypes } from '../definitions';
 import { TimeoutError } from '../helpers/waiting';
 import { createGenericError, createTimeoutError } from './errors';
 import {
+  type ForeignCurrencyAccountsScrapingResult,
+  type PortfolioScrapingResult,
   type Scraper,
   type ScraperCredentials,
   type ScraperGetLongTermTwoFactorTokenResult,
@@ -17,6 +19,18 @@ const SCRAPE_PROGRESS = 'SCRAPE_PROGRESS';
 
 export class BaseScraper<TCredentials extends ScraperCredentials> implements Scraper<TCredentials> {
   private eventEmitter = new EventEmitter();
+
+  doesSupportTransactions(): boolean {
+    return false;
+  }
+
+  doesSupportPortfolios(): boolean {
+    return false;
+  }
+
+  doesSupportForeignCurrencyAccounts(): boolean {
+    return false;
+  }
 
   constructor(public options: ScraperOptions) {}
 
@@ -63,6 +77,88 @@ export class BaseScraper<TCredentials extends ScraperCredentials> implements Scr
     return scrapeResult;
   }
 
+  async scrapePortfolios(credentials: TCredentials): Promise<PortfolioScrapingResult> {
+    if (!this.doesSupportPortfolios()) {
+      throw new Error(`scrapePortfolios() is not supported in ${this.options.companyId}`);
+    }
+
+    this.emitProgress(ScraperProgressTypes.StartScraping);
+    await this.initialize();
+
+    let loginResult;
+    try {
+      loginResult = await this.login(credentials);
+    } catch (e) {
+      loginResult =
+        e instanceof TimeoutError ? createTimeoutError((e as Error).message) : createGenericError((e as Error).message);
+    }
+
+    let scrapeResult;
+    if (loginResult.success) {
+      try {
+        scrapeResult = await this.fetchPortfolios();
+      } catch (e) {
+        scrapeResult =
+          e instanceof TimeoutError
+            ? createTimeoutError((e as Error).message)
+            : createGenericError((e as Error).message);
+      }
+    } else {
+      scrapeResult = loginResult;
+    }
+
+    try {
+      const success = scrapeResult && scrapeResult.success === true;
+      await this.terminate(success);
+    } catch (e) {
+      scrapeResult = createGenericError((e as Error).message);
+    }
+    this.emitProgress(ScraperProgressTypes.EndScraping);
+
+    return scrapeResult;
+  }
+
+  async scrapeForeignCurrencyAccounts(credentials: TCredentials): Promise<ForeignCurrencyAccountsScrapingResult> {
+    if (!this.doesSupportForeignCurrencyAccounts()) {
+      throw new Error(`scrapeForeignCurrencyAccounts() is not supported in ${this.options.companyId}`);
+    }
+
+    this.emitProgress(ScraperProgressTypes.StartScraping);
+    await this.initialize();
+
+    let loginResult;
+    try {
+      loginResult = await this.login(credentials);
+    } catch (e) {
+      loginResult =
+        e instanceof TimeoutError ? createTimeoutError((e as Error).message) : createGenericError((e as Error).message);
+    }
+
+    let scrapeResult;
+    if (loginResult.success) {
+      try {
+        scrapeResult = await this.fetchForeignCurrencyAccounts();
+      } catch (e) {
+        scrapeResult =
+          e instanceof TimeoutError
+            ? createTimeoutError((e as Error).message)
+            : createGenericError((e as Error).message);
+      }
+    } else {
+      scrapeResult = loginResult;
+    }
+
+    try {
+      const success = scrapeResult && scrapeResult.success === true;
+      await this.terminate(success);
+    } catch (e) {
+      scrapeResult = createGenericError((e as Error).message);
+    }
+    this.emitProgress(ScraperProgressTypes.EndScraping);
+
+    return scrapeResult;
+  }
+
   // eslint-disable-next-line @typescript-eslint/no-unused-vars, @typescript-eslint/require-await
   triggerTwoFactorAuth(_phoneNumber: string): Promise<ScraperTwoFactorAuthTriggerResult> {
     throw new Error(`triggerOtp() is not created in ${this.options.companyId}`);
@@ -81,6 +177,16 @@ export class BaseScraper<TCredentials extends ScraperCredentials> implements Scr
   // eslint-disable-next-line  @typescript-eslint/require-await
   protected async fetchData(): Promise<ScraperScrapingResult> {
     throw new Error(`fetchData() is not created in ${this.options.companyId}`);
+  }
+
+  // eslint-disable-next-line  @typescript-eslint/require-await
+  protected async fetchPortfolios(): Promise<PortfolioScrapingResult> {
+    throw new Error(`fetchPortfolios() is not created in ${this.options.companyId}`);
+  }
+
+  // eslint-disable-next-line  @typescript-eslint/require-await
+  protected async fetchForeignCurrencyAccounts(): Promise<ForeignCurrencyAccountsScrapingResult> {
+    throw new Error(`fetchForeignCurrencyAccounts() is not created in ${this.options.companyId}`);
   }
 
   // eslint-disable-next-line @typescript-eslint/no-unused-vars, @typescript-eslint/require-await
