@@ -588,6 +588,10 @@ class LeumiScraper extends BaseScraperWithBrowser<ScraperSpecificCredentials> {
         extractPortfolioInvestments(response, investments);
         return;
       }
+      if (response.url().includes('Statement')) {
+        extractPortfolioInvestments(response, investments);
+        return;
+      }
 
       if (response.url().includes('lti-app/api/config')) {
         extractPortfolios(response, portfolios);
