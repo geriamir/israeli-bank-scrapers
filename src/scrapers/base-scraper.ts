@@ -21,7 +21,7 @@ export class BaseScraper<TCredentials extends ScraperCredentials> implements Scr
   private eventEmitter = new EventEmitter();
 
   doesSupportTransactions(): boolean {
-    return false;
+    return true;
   }
 
   doesSupportPortfolios(): boolean {
