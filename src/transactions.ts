@@ -49,6 +49,7 @@ export interface Transaction {
   status: TransactionStatuses;
   installments?: TransactionInstallments;
   category?: string;
+  rawTransaction?: unknown;
 }
 
 export interface TransactionsForeignAccount extends TransactionsAccount {
