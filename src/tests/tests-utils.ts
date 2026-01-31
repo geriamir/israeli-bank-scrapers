@@ -100,3 +100,104 @@ export function exportTransactions(fileName: string, accounts: TransactionsAccou
   const filePath = `${path.join(config.companyAPI.excelFilesDist, fileName)}.csv`;
   fs.writeFileSync(filePath, csv);
 }
+
+// Helper function to export portfolios data
+export function exportPortfolios(fileName: string, portfolios: any[]) {
+  const config = getTestsConfig();
+
+  let data: any = [];
+
+  for (let i = 0; i < portfolios.length; i += 1) {
+    const portfolio = portfolios[i];
+
+    // Export investments
+    data = [
+      ...data,
+      ...portfolio.investments.map((investment: any) => {
+        return {
+          portfolioId: portfolio.portfolioId,
+          portfolioName: portfolio.portfolioName,
+          type: 'investment',
+          paperId: investment.paperId,
+          paperName: investment.paperName,
+          symbol: investment.symbol,
+          amount: investment.amount,
+          value: investment.value,
+          currency: investment.currency,
+        };
+      }),
+    ];
+
+    // Export investment transactions
+    data = [
+      ...data,
+      ...portfolio.transactions.map((transaction: any) => {
+        return {
+          portfolioId: portfolio.portfolioId,
+          portfolioName: portfolio.portfolioName,
+          type: 'transaction',
+          paperId: transaction.paperId,
+          paperName: transaction.paperName,
+          symbol: transaction.symbol,
+          amount: transaction.amount,
+          value: transaction.value,
+          currency: transaction.currency,
+          taxSum: transaction.taxSum,
+          executionDate: moment(transaction.executionDate).format('DD/MM/YYYY'),
+          executablePrice: transaction.executablePrice,
+        };
+      }),
+    ];
+  }
+
+  if (data.length === 0) {
+    data = [
+      {
+        comment: 'no portfolios found for requested time frame',
+      },
+    ];
+  }
+
+  const parser = new Parser({ withBOM: true });
+  const csv = parser.parse(data);
+  const filePath = `${path.join(config.companyAPI.excelFilesDist, fileName)}.csv`;
+  fs.writeFileSync(filePath, csv);
+}
+
+// Helper function to export foreign currency accounts data
+export function exportForeignCurrencyAccounts(fileName: string, accounts: any[]) {
+  const config = getTestsConfig();
+
+  let data: any = [];
+
+  for (let i = 0; i < accounts.length; i += 1) {
+    const account = accounts[i];
+
+    data = [
+      ...data,
+      ...account.txns.map((txn: any) => {
+        return {
+          accountNumber: account.accountNumber,
+          balance: `account balance: ${account.balance}`,
+          currency: account.currency,
+          ...txn,
+          date: moment(txn.date).format('DD/MM/YYYY'),
+          processedDate: moment(txn.processedDate).format('DD/MM/YYYY'),
+        };
+      }),
+    ];
+  }
+
+  if (data.length === 0) {
+    data = [
+      {
+        comment: 'no foreign currency accounts found for requested time frame',
+      },
+    ];
+  }
+
+  const parser = new Parser({ withBOM: true });
+  const csv = parser.parse(data);
+  const filePath = `${path.join(config.companyAPI.excelFilesDist, fileName)}.csv`;
+  fs.writeFileSync(filePath, csv);
+}

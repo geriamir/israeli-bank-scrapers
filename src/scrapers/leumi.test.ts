@@ -1,129 +1,17 @@
 import LeumiScraper from './leumi';
-import { maybeTestCompanyAPI, extendAsyncTimeout, getTestsConfig, exportTransactions } from '../tests/tests-utils';
+import {
+  maybeTestCompanyAPI,
+  extendAsyncTimeout,
+  getTestsConfig,
+  exportTransactions,
+  exportForeignCurrencyAccounts,
+  exportPortfolios,
+} from '../tests/tests-utils';
 import { SCRAPERS } from '../definitions';
 import { LoginResults } from './base-scraper-with-browser';
-import fs from 'fs';
-import path from 'path';
-import * as json2csv from 'json2csv';
-import moment from 'moment';
 
 const COMPANY_ID = 'leumi'; // TODO this property should be hard-coded in the provider
 const testsConfig = getTestsConfig();
-
-// Helper function to export portfolios data
-function exportPortfolios(fileName: string, portfolios: any[]) {
-  const config = getTestsConfig();
-
-  if (
-    !config.companyAPI.enabled ||
-    !config.companyAPI.excelFilesDist ||
-    !fs.existsSync(config.companyAPI.excelFilesDist)
-  ) {
-    return;
-  }
-
-  let data: any = [];
-
-  for (let i = 0; i < portfolios.length; i += 1) {
-    const portfolio = portfolios[i];
-
-    // Export investments
-    data = [
-      ...data,
-      ...portfolio.investments.map((investment: any) => {
-        return {
-          portfolioId: portfolio.portfolioId,
-          portfolioName: portfolio.portfolioName,
-          type: 'investment',
-          paperId: investment.paperId,
-          paperName: investment.paperName,
-          symbol: investment.symbol,
-          amount: investment.amount,
-          value: investment.value,
-          currency: investment.currency,
-        };
-      }),
-    ];
-
-    // Export investment transactions
-    data = [
-      ...data,
-      ...portfolio.transactions.map((transaction: any) => {
-        return {
-          portfolioId: portfolio.portfolioId,
-          portfolioName: portfolio.portfolioName,
-          type: 'transaction',
-          paperId: transaction.paperId,
-          paperName: transaction.paperName,
-          symbol: transaction.symbol,
-          amount: transaction.amount,
-          value: transaction.value,
-          currency: transaction.currency,
-          taxSum: transaction.taxSum,
-          executionDate: moment(transaction.executionDate).format('DD/MM/YYYY'),
-          executablePrice: transaction.executablePrice,
-        };
-      }),
-    ];
-  }
-
-  if (data.length === 0) {
-    data = [
-      {
-        comment: 'no portfolios found for requested time frame',
-      },
-    ];
-  }
-
-  const csv = json2csv.parse(data, { withBOM: true });
-  const filePath = `${path.join(config.companyAPI.excelFilesDist, `${fileName}_portfolios`)}.csv`;
-  fs.writeFileSync(filePath, csv);
-}
-
-// Helper function to export foreign currency accounts data
-function exportForeignCurrencyAccounts(fileName: string, accounts: any[]) {
-  const config = getTestsConfig();
-
-  if (
-    !config.companyAPI.enabled ||
-    !config.companyAPI.excelFilesDist ||
-    !fs.existsSync(config.companyAPI.excelFilesDist)
-  ) {
-    return;
-  }
-
-  let data: any = [];
-
-  for (let i = 0; i < accounts.length; i += 1) {
-    const account = accounts[i];
-
-    data = [
-      ...data,
-      ...account.txns.map((txn: any) => {
-        return {
-          accountNumber: account.accountNumber,
-          balance: `account balance: ${account.balance}`,
-          currency: account.currency,
-          ...txn,
-          date: moment(txn.date).format('DD/MM/YYYY'),
-          processedDate: moment(txn.processedDate).format('DD/MM/YYYY'),
-        };
-      }),
-    ];
-  }
-
-  if (data.length === 0) {
-    data = [
-      {
-        comment: 'no foreign currency accounts found for requested time frame',
-      },
-    ];
-  }
-
-  const csv = json2csv.parse(data, { withBOM: true });
-  const filePath = `${path.join(config.companyAPI.excelFilesDist, `${fileName}_foreign_currency`)}.csv`;
-  fs.writeFileSync(filePath, csv);
-}
 
 describe('Leumi legacy scraper', () => {
   beforeAll(() => {

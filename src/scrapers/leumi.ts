@@ -18,7 +18,7 @@ import {
   type ForeignCurrencyAccountsScrapingResult,
   type PortfolioScrapingResult,
   type ScraperOptions,
-  type ScraperScrapingResult
+  type ScraperScrapingResult,
 } from './interface';
 
 const debug = getDebug('leumi');
