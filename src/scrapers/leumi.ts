@@ -282,8 +282,12 @@ function extractPortfolioInvestments(response: HTTPResponse, investments: Invest
       debug('Investment data received:', data);
 
       const userStatement = data?.data.UserStatement?.DataSource;
-      debug('User statement:', userStatement);
+      if (!userStatement) {
+        debug('No user statement data found in response');
+        return;
+      }
 
+      debug('User statement:', userStatement);
       for (const item of userStatement) {
         const investment: Investment = {
           paperId: item.PaperId,
@@ -332,15 +336,29 @@ async function extractPortfolioTransactionsFromResponse(response: HTTPResponse):
 }
 
 async function setStartingDateForPortfolioTransactions(page: Page, startDate: moment.Moment) {
-  await page.waitForSelector('div.select-period-block');
-  await clickByXPath(page, 'xpath///div[contains(@class, "select-period-block")]');
+  await page.waitForSelector('div.select-period-block', { visible: true });
 
-  await page.waitForSelector('div.mat-select-panel-wrap');
+  // Material UI dropdowns need to be clicked on the mat-select trigger, not the mat-form-field
+  // Using evaluate to click directly on the element works better than XPath for Material UI
+  await page.evaluate(() => {
+    const formField = document.querySelector(
+      'div.select-period-block mat-form-field[data-combo-id="periodSelectInline"]',
+    );
+    const matSelect = formField?.querySelector('mat-select');
+    if (matSelect) {
+      (matSelect as HTMLElement).click();
+    }
+  });
+
+  await page.waitForSelector('div.mat-select-panel', { visible: true, timeout: 10000 });
   await clickByXPath(page, 'xpath///mat-option[last()]');
 
   const selectedPeriod = await page.$eval('div.select-period-block .mat-select-value', div =>
     (div as HTMLElement).innerText.trim(),
   );
+
+  debug("waiting before entering dates for transactions history.");
+  await hangProcess(1000);
 
   if (selectedPeriod != 'לפי תאריכים') {
     await page.waitForSelector('div.select-period-block');
@@ -527,7 +545,8 @@ async function fetchForeignTransactions(page: Page, startDate: Moment): Promise<
 }
 
 async function fetchPortfolioTransactions(page: Page, startDate: Moment): Promise<InvestmentTransaction[]> {
-  await page.setRequestInterception(true);
+  // Request interception is already enabled by fetchPortfoliosForTime,
+  // so we don't need to enable it again here
 
   await setStartingDateForPortfolioTransactions(page, startDate);
 
@@ -542,8 +561,6 @@ async function fetchPortfolioTransactions(page: Page, startDate: Moment): Promis
   const response = await responsePromise; // Wait for the specific response
   debug('Response received:', response.url());
   const transactions = await extractPortfolioTransactionsFromResponse(response);
-
-  await page.setRequestInterception(false);
 
   return transactions;
 }
@@ -581,17 +598,16 @@ class LeumiScraper extends BaseScraperWithBrowser<ScraperSpecificCredentials> {
   }
 
   async fetchPortfoliosForTime(startDate: Moment): Promise<Portfolio[]> {
-    await this.page.setRequestInterception(true);
-
-    this.page.on('request', request => {
-      request.continue().catch(error => {
-        debug('Error continuing request:', error);
-      });
-    });
+   
+    debug(
+      'waiting 3 seconds before navigating to portfolio page to ensure all listeners are set up and any initial requests are captured',
+    );
+    await hangProcess(3000);
 
     const investments: Investment[] = [];
     const portfolios: Portfolio[] = [];
 
+    debug('Listening for responses to extract portfolio and investment data');
     const handlePortfoliosPageResponse = (response: HTTPResponse) => {
       // You can filter responses based on criteria like URL, method, or resource type.
       // For XHR requests, check if the resource type is 'xhr' or 'fetch'.
@@ -616,9 +632,10 @@ class LeumiScraper extends BaseScraperWithBrowser<ScraperSpecificCredentials> {
 
     this.page.on('response', handlePortfoliosPageResponse);
 
+    debug(`Navigating to portfolio page: ${LEUMI_TRADING_URL}`);
     await this.navigateTo(LEUMI_TRADING_URL);
 
-    await this.page.waitForSelector('.portfolio-tbl-sticky-native', { visible: true });
+    await this.page.waitForSelector('.screener', { visible: true });
     await hangProcess(5000); // Wait for the investments data to load
 
     if (portfolios.length > 0) {
@@ -627,8 +644,9 @@ class LeumiScraper extends BaseScraperWithBrowser<ScraperSpecificCredentials> {
     }
 
     this.page.off('response', handlePortfoliosPageResponse);
+    // this.page.off('request', requestHandler);
 
-    await this.page.setRequestInterception(false);
+    // await this.page.setRequestInterception(false);
 
     await this.navigateTo(LEUMI_TRADING_HISTORY_URL);
 
@@ -656,6 +674,8 @@ class LeumiScraper extends BaseScraperWithBrowser<ScraperSpecificCredentials> {
 
   async fetchPortfolios(): Promise<PortfolioScrapingResult> {
     const startMoment = this.getStartMoment();
+
+    debug('Fetching portfolios with start date:', startMoment.format(DATE_FORMAT));
 
     const investments = await this.fetchPortfoliosForTime(startMoment);
 

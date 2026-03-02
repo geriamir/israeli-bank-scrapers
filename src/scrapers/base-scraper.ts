@@ -14,6 +14,7 @@ import {
   type ScraperScrapingResult,
   type ScraperTwoFactorAuthTriggerResult,
 } from './interface';
+import { debug } from 'console';
 
 const SCRAPE_PROGRESS = 'SCRAPE_PROGRESS';
 
@@ -107,6 +108,8 @@ export class BaseScraper<TCredentials extends ScraperCredentials> implements Scr
       scrapeResult = loginResult;
     }
 
+    debug('Scrape portfolios result', scrapeResult);
+
     try {
       const success = scrapeResult && scrapeResult.success === true;
       await this.terminate(success);
@@ -114,6 +117,8 @@ export class BaseScraper<TCredentials extends ScraperCredentials> implements Scr
       scrapeResult = createGenericError((e as Error).message);
     }
     this.emitProgress(ScraperProgressTypes.EndScraping);
+
+    debug('Scrape portfolios result', scrapeResult);
 
     return scrapeResult;
   }
@@ -147,6 +152,8 @@ export class BaseScraper<TCredentials extends ScraperCredentials> implements Scr
     } else {
       scrapeResult = loginResult;
     }
+
+    
 
     try {
       const success = scrapeResult && scrapeResult.success === true;
