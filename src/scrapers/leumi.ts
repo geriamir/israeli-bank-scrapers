@@ -4,6 +4,7 @@ import { DOLLAR_CURRENCY, SHEKEL_CURRENCY } from '../constants';
 import { getDebug } from '../helpers/debug';
 import { clickButton, fillInput, pageEval, pageEvalAll, waitUntilElementFound } from '../helpers/elements-interactions';
 import { getRawTransaction } from '../helpers/transactions';
+import { generateTransactionUniqueId } from '../helpers/unique-id';
 import { waitForNavigation } from '../helpers/navigation';
 import {
   TransactionStatuses,
@@ -92,6 +93,15 @@ function extractTransactionsFromPage(
       processedDate: date,
       description: rawTransaction.Description || '',
       identifier: rawTransaction.ReferenceNumberLong,
+      uniqueId: generateTransactionUniqueId(
+        date,
+        rawTransaction.Amount,
+        rawTransaction.Description,
+        rawTransaction.ReferenceNumberLong,
+        rawTransaction.FITID,
+        rawTransaction.RunningBalance,
+        rawTransaction.AdditionalData,
+      ),
       memo: rawTransaction.AdditionalData || '',
       originalCurrency: SHEKEL_CURRENCY,
       chargedAmount: rawTransaction.Amount,
@@ -306,33 +316,36 @@ function extractPortfolioInvestments(response: HTTPResponse, investments: Invest
     });
 }
 
-async function extractPortfolioTransactionsFromResponse(response: HTTPResponse): Promise<InvestmentTransaction[]> {
-  const data = await response.json();
-  debug('Portfolio data received:', data);
+function extractPortfolioTransactionsFromResponse(response: HTTPResponse, transactions: InvestmentTransaction[]) {
+  response
+    .json()
+    .then(data => {
+      debug('Portfolio data received:', data);
 
-  const records = data?.data.GetOrdersHistory?.ordersHistory?.records;
-  debug('User statement:', records);
+      const records = data?.data.GetOrdersHistory?.ordersHistory?.records;
+      debug('User statement:', records);
 
-  const transactions: InvestmentTransaction[] = [];
-  if (records && records.length > 0) {
-    for (const item of records) {
-      const transaction: InvestmentTransaction = {
-        paperId: item.PaperId,
-        paperName: item.PaperName,
-        symbol: item.Symbol,
-        amount: parseFloat(item.Amount),
-        value: parseFloat(item.ExecutableTotal),
-        currency: convertInvestmentCurrency(item.CurrencyCode),
-        taxSum: parseFloat(item.TaxSum),
-        executionDate: new Date(item.ExecutionDate),
-        executablePrice: parseFloat(item.ExecutablePrice),
-      };
+      if (records && records.length > 0) {
+        for (const item of records) {
+          const transaction: InvestmentTransaction = {
+            paperId: item.PaperId,
+            paperName: item.PaperName,
+            symbol: item.Symbol,
+            amount: parseFloat(item.Amount),
+            value: parseFloat(item.ExecutableTotal),
+            currency: convertInvestmentCurrency(item.CurrencyCode),
+            taxSum: parseFloat(item.TaxSum),
+            executionDate: new Date(item.ExecutionDate),
+            executablePrice: parseFloat(item.ExecutablePrice),
+          };
 
-      transactions.push(transaction);
-    }
-  }
-
-  return transactions;
+          transactions.push(transaction);
+        }
+      }
+    })
+    .catch(error => {
+      debug('Error parsing response JSON:', error);
+    });
 }
 
 async function setStartingDateForPortfolioTransactions(page: Page, startDate: moment.Moment) {
@@ -357,32 +370,40 @@ async function setStartingDateForPortfolioTransactions(page: Page, startDate: mo
     (div as HTMLElement).innerText.trim(),
   );
 
-  debug("waiting before entering dates for transactions history.");
+  debug('waiting before entering dates for transactions history.');
   await hangProcess(1000);
 
+  debug('Selected period:', selectedPeriod);
   if (selectedPeriod != 'לפי תאריכים') {
+    debug('Selected period is not "לפי תאריכים", selecting "לפי תאריכים" option to enter custom dates');
     await page.waitForSelector('div.select-period-block');
     await clickByXPath(page, 'xpath///div[contains(@class, "select-period-block")]');
 
+    debug('Waiting for period options to be visible');
     await page.waitForSelector('div.mat-select-panel-wrap');
     await clickByXPath(page, 'xpath///mat-option[last()]');
   }
 
+  debug('Waiting for date inputs to be visible');
   await page.waitForSelector('div#chooseByDatesBlock');
   await clickByXPath(page, 'xpath///div[@id="chooseByDatesBlock"]//input[@id="mat-input-0"]');
 
+  debug('Waiting for calendar to be visible');
   await page.waitForSelector('mat-calendar');
   await clickByXPath(page, 'xpath///mat-calendar//button[contains(@class, "mat-calendar-period-button")]');
 
   const year = startDate.get('year');
+  debug('selecting year:', year);
   await page.waitForSelector(`mat-calendar td[aria-label="${year}"]`);
   await clickByXPath(page, `xpath///mat-calendar//td[contains(@aria-label, "${year}")]`);
 
   const month = '01/' + startDate.format('MM/YY');
+  debug('selecting month:', month);
   await page.waitForSelector(`mat-calendar td[aria-label="${month}"]`);
   await clickByXPath(page, `xpath///mat-calendar//td[contains(@aria-label, "${month}")]`);
 
   const day = startDate.format('DD/MM/YY');
+  debug('selecting day:', day);
   await page.waitForSelector(`mat-calendar td[aria-label="${day}"]`);
   await clickByXPath(page, `xpath///mat-calendar//td[contains(@aria-label, "${day}")]`);
 }
@@ -433,18 +454,20 @@ function getForeignTransactionAmount(debitCellText: string, creditCellText: stri
 
 function mapForeignTransaction(raw: any, currency: string): Transaction {
   const date = cellTextToISODate(raw[0]);
-
+  const description = raw[1];
+  const referenceNumber = raw[2];
   const amount = getForeignTransactionAmount(raw[3], raw[4]);
-  // const balance = cellTextToNumber(raw[5]);
+  const balance = cellTextToNumber(raw[5]);
 
   return {
     type: TransactionTypes.Normal,
     date: date,
     processedDate: date,
-    identifier: raw[2],
+    identifier: referenceNumber,
+    uniqueId: generateTransactionUniqueId(date, amount, description, referenceNumber, balance),
     originalAmount: amount,
     chargedAmount: amount,
-    description: raw[1],
+    description,
     originalCurrency: currency,
     status: TransactionStatuses.Completed,
   };
@@ -550,17 +573,29 @@ async function fetchPortfolioTransactions(page: Page, startDate: Moment): Promis
 
   await setStartingDateForPortfolioTransactions(page, startDate);
 
-  const responsePromise = page.waitForResponse(
-    response =>
-      (response.request().resourceType() === 'xhr' || response.request().resourceType() === 'fetch') &&
-      response.url().includes('GetOrdersHistory'),
-  );
+  const transactions: InvestmentTransaction[] = [];
 
+  const handleOrderHistoryResponse = (response: HTTPResponse) => {
+    // You can filter responses based on criteria like URL, method, or resource type.
+    // For XHR requests, check if the resource type is 'xhr' or 'fetch'.
+    if (response.request().resourceType() !== 'xhr' && response.request().resourceType() !== 'fetch') {
+      return;
+    }
+
+    if (response.url().includes('GetOrdersHistory')) {
+      extractPortfolioTransactionsFromResponse(response, transactions);
+      return;
+    }
+  };
+
+  page.on('response', handleOrderHistoryResponse);
+
+  debug('Submitting request to fetch portfolio transactions');
   await clickByXPath(page, 'xpath///div[@id="chooseByDatesBlock"]//button[contains(@class, "btn-primary")]');
 
-  const response = await responsePromise; // Wait for the specific response
-  debug('Response received:', response.url());
-  const transactions = await extractPortfolioTransactionsFromResponse(response);
+  await hangProcess(5000); // Wait for the transactions to be fetched and processed
+
+  page.off('response', handleOrderHistoryResponse);
 
   return transactions;
 }
@@ -598,7 +633,6 @@ class LeumiScraper extends BaseScraperWithBrowser<ScraperSpecificCredentials> {
   }
 
   async fetchPortfoliosForTime(startDate: Moment): Promise<Portfolio[]> {
-   
     debug(
       'waiting 3 seconds before navigating to portfolio page to ensure all listeners are set up and any initial requests are captured',
     );
@@ -615,10 +649,6 @@ class LeumiScraper extends BaseScraperWithBrowser<ScraperSpecificCredentials> {
         return;
       }
 
-      if (response.url().includes('Statement')) {
-        extractPortfolioInvestments(response, investments);
-        return;
-      }
       if (response.url().includes('Statement')) {
         extractPortfolioInvestments(response, investments);
         return;

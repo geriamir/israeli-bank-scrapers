@@ -153,8 +153,6 @@ export class BaseScraper<TCredentials extends ScraperCredentials> implements Scr
       scrapeResult = loginResult;
     }
 
-    
-
     try {
       const success = scrapeResult && scrapeResult.success === true;
       await this.terminate(success);

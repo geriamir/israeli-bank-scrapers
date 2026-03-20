@@ -33,6 +33,11 @@ export interface Transaction {
    */
   identifier?: string | number;
   /**
+   * A stable unique ID for deduplication, derived from bank-specific fields.
+   * More reliable than identifier alone for detecting duplicates across syncs.
+   */
+  uniqueId?: string;
+  /**
    * ISO date string
    */
   date: string;

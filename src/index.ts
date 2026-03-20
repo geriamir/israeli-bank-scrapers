@@ -20,3 +20,4 @@ export function getPuppeteerConfig() {
 
 export * from './investments';
 export * from './transactions';
+export { generateTransactionUniqueId } from './helpers/unique-id';

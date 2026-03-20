@@ -1,0 +1,4 @@
+﻿"accountNumber","balance","currency","type","date","processedDate","identifier","uniqueId","originalAmount","chargedAmount","description","originalCurrency","status"
+"49146/61094","account balance: 0","USD","normal","12/03/2026","12/03/2026","157296125","5d060a4f5d2a43b9f0d56376ad0915c5",4990,4990,"העברה במט""ח","USD","completed"
+"49146/61094","account balance: 0","USD","normal","12/03/2026","12/03/2026","157296134","47ee053b1e36008b5e7c2016a9f0919a",4990,4990,"העברה במט""ח","USD","completed"
+"49146/61094","account balance: 0","USD","normal","12/03/2026","12/03/2026","700167776","96fcf33203a429ecbd66f5bfcb21d946",-9980,-9980,"המרה-אינטרנט","USD","completed"
