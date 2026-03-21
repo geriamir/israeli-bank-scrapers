@@ -103,6 +103,12 @@ function extractTransactionsFromPage(
         rawTransaction.AdditionalData,
       ),
       memo: rawTransaction.AdditionalData || '',
+      bankFields: {
+        FITID: rawTransaction.FITID,
+        RunningBalance: rawTransaction.RunningBalance,
+        ReferenceNumberLong: rawTransaction.ReferenceNumberLong,
+        AdditionalData: rawTransaction.AdditionalData,
+      },
       originalCurrency: SHEKEL_CURRENCY,
       chargedAmount: rawTransaction.Amount,
       originalAmount: rawTransaction.Amount,
@@ -465,6 +471,10 @@ function mapForeignTransaction(raw: any, currency: string): Transaction {
     processedDate: date,
     identifier: referenceNumber,
     uniqueId: generateTransactionUniqueId(date, amount, description, referenceNumber, balance),
+    bankFields: {
+      referenceNumber,
+      balance,
+    },
     originalAmount: amount,
     chargedAmount: amount,
     description,

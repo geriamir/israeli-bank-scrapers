@@ -55,6 +55,11 @@ export interface Transaction {
   installments?: TransactionInstallments;
   category?: string;
   rawTransaction?: unknown;
+  /**
+   * Bank-specific fields used for uniqueId generation, preserved for
+   * retroactive recomputation and debugging.
+   */
+  bankFields?: Record<string, string | number | null | undefined>;
 }
 
 export interface TransactionsForeignAccount extends TransactionsAccount {
