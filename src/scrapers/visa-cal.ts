@@ -312,6 +312,7 @@ function convertParsedDataToTransactions(
 
     const result: Transaction = {
       identifier: !isPending(transaction) ? transaction.trnIntId : undefined,
+      uniqueId: !isPending(transaction) ? transaction.trnIntId : undefined,
       type: [TrnTypeCode.regular, TrnTypeCode.standingOrder].includes(transaction.trnTypeCode)
         ? TransactionTypes.Normal
         : TransactionTypes.Installments,
