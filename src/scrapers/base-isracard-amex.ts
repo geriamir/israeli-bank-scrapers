@@ -1,13 +1,14 @@
-import _ from 'lodash';
 import moment, { type Moment } from 'moment';
 import { type Page } from 'puppeteer';
 import { ALT_SHEKEL_CURRENCY, SHEKEL_CURRENCY, SHEKEL_CURRENCY_KEYWORD } from '../constants';
 import { ScraperProgressTypes } from '../definitions';
+import { interceptionPriorities, maskHeadlessUserAgent } from '../helpers/browser';
 import getAllMonthMoments from '../helpers/dates';
 import { getDebug } from '../helpers/debug';
 import { fetchGetWithinPage, fetchPostWithinPage } from '../helpers/fetch';
+import { chunk } from '../helpers/arrays';
 import { filterOldTransactions, fixInstallments, getRawTransaction } from '../helpers/transactions';
-import { runSerial, sleep } from '../helpers/waiting';
+import { randomDelay, runSerial, sleep } from '../helpers/waiting';
 import {
   TransactionStatuses,
   TransactionTypes,
@@ -18,10 +19,9 @@ import {
 import { BaseScraperWithBrowser } from './base-scraper-with-browser';
 import { ScraperErrorTypes } from './errors';
 import { type ScraperOptions, type ScraperScrapingResult } from './interface';
-import { interceptionPriorities, maskHeadlessUserAgent } from '../helpers/browser';
 
 const RATE_LIMIT = {
-  SLEEP_BETWEEN: 1000,
+  SLEEP_BETWEEN: 2500, // Sweet spot: 2.5s base delay (randomized up to 3s)
   TRANSACTIONS_BATCH_SIZE: 10,
 } as const;
 
@@ -119,10 +119,15 @@ function getAccountsUrl(servicesUrl: string, monthMoment: Moment) {
 }
 
 async function fetchAccounts(page: Page, servicesUrl: string, monthMoment: Moment): Promise<ScrapedAccount[]> {
+  const startTime = performance.now();
   const dataUrl = getAccountsUrl(servicesUrl, monthMoment);
-  debug(`fetching accounts from ${dataUrl}`);
+
+  debug(`fetching accounts for ${monthMoment.format('YYYY-MM')} from ${dataUrl}`);
+  await randomDelay(RATE_LIMIT.SLEEP_BETWEEN, RATE_LIMIT.SLEEP_BETWEEN + 500);
   const dataResult = await fetchGetWithinPage<ScrapedAccountsWithinPageResponse>(page, dataUrl);
-  if (dataResult && _.get(dataResult, 'Header.Status') === '1' && dataResult.DashboardMonthBean) {
+  debug(`Fetch for ${monthMoment.format('YYYY-MM')} completed in ${performance.now() - startTime}ms`);
+
+  if (dataResult && dataResult.Header?.Status === '1' && dataResult.DashboardMonthBean) {
     const { cardsCharges } = dataResult.DashboardMonthBean;
     if (cardsCharges) {
       return cardsCharges.map(cardCharge => {
@@ -223,18 +228,20 @@ async function fetchTransactions(
   startMoment: Moment,
   monthMoment: Moment,
 ): Promise<ScrapedAccountsWithIndex> {
+  const startTime = performance.now();
   const accounts = await fetchAccounts(page, companyServiceOptions.servicesUrl, monthMoment);
   const dataUrl = getTransactionsUrl(companyServiceOptions.servicesUrl, monthMoment);
-  await sleep(RATE_LIMIT.SLEEP_BETWEEN);
-  debug(`fetching transactions from ${dataUrl} for month ${monthMoment.format('YYYY-MM')}`);
+
+  debug(`fetching transactions for ${monthMoment.format('YYYY-MM')} from ${dataUrl}`);
+  await randomDelay(RATE_LIMIT.SLEEP_BETWEEN, RATE_LIMIT.SLEEP_BETWEEN + 500);
   const dataResult = await fetchGetWithinPage<ScrapedTransactionData>(page, dataUrl);
-  if (dataResult && _.get(dataResult, 'Header.Status') === '1' && dataResult.CardsTransactionsListBean) {
+  debug(`Fetch for ${monthMoment.format('YYYY-MM')} completed in ${performance.now() - startTime}ms`);
+
+  if (dataResult && dataResult.Header?.Status === '1' && dataResult.CardsTransactionsListBean) {
     const accountTxns: ScrapedAccountsWithIndex = {};
     accounts.forEach(account => {
-      const txnGroups: ScrapedCurrentCardTransactions[] | undefined = _.get(
-        dataResult,
-        `CardsTransactionsListBean.Index${account.index}.CurrentCardTransactions`,
-      );
+      const txnGroups: ScrapedCurrentCardTransactions[] | undefined =
+        dataResult.CardsTransactionsListBean?.[`Index${account.index}`]?.CurrentCardTransactions;
       if (txnGroups) {
         let allTxns: Transaction[] = [];
         txnGroups.forEach(txnGroup => {
@@ -286,7 +293,7 @@ async function getExtraScrapTransaction(
     return transaction;
   }
 
-  const rawCategory = _.get(data, 'PirteyIska_204Bean.sector') ?? '';
+  const rawCategory = data.PirteyIska_204Bean?.sector ?? '';
   return {
     ...transaction,
     category: rawCategory.trim(),
@@ -307,7 +314,7 @@ async function getExtraScrapAccount(
       month.format('YYYY-MM'),
     );
     const txns: Transaction[] = [];
-    for (const txnsChunk of _.chunk(account.txns, RATE_LIMIT.TRANSACTIONS_BATCH_SIZE)) {
+    for (const txnsChunk of chunk(account.txns, RATE_LIMIT.TRANSACTIONS_BATCH_SIZE)) {
       debug(`processing chunk of ${txnsChunk.length} transactions for account ${account.accountNumber}`);
       const updatedTxns = await Promise.all(
         txnsChunk.map(t => getExtraScrapTransaction(page, options, month, account.index, t)),
@@ -343,8 +350,11 @@ async function fetchAllTransactions(
   companyServiceOptions: CompanyServiceOptions,
   startMoment: Moment,
 ) {
+  const fetchStartTime = performance.now();
   const futureMonthsToScrape = options.futureMonthsToScrape ?? 1;
   const allMonths = getAllMonthMoments(startMoment, futureMonthsToScrape);
+  debug(`Fetching transactions for ${allMonths.length} months`);
+
   const results: ScrapedAccountsWithIndex[] = await runSerial(
     allMonths.map(monthMoment => () => {
       return fetchTransactions(page, options, companyServiceOptions, startMoment, monthMoment);
@@ -379,6 +389,8 @@ async function fetchAllTransactions(
     };
   });
 
+  debug(`fetchAllTransactions completed in ${performance.now() - fetchStartTime}ms`);
+
   return {
     success: true,
     accounts,
@@ -402,6 +414,7 @@ class IsracardAmexBaseScraper extends BaseScraperWithBrowser<ScraperSpecificCred
   }
 
   async login(credentials: ScraperSpecificCredentials): Promise<ScraperScrapingResult> {
+    const loginStartTime = performance.now();
     await this.page.setRequestInterception(true);
     this.page.on('request', request => {
       if (request.url().includes('detector-dom.min.js')) {
@@ -458,6 +471,7 @@ class IsracardAmexBaseScraper extends BaseScraperWithBrowser<ScraperSpecificCred
 
       if (loginResult && loginResult.status === '1') {
         this.emitProgress(ScraperProgressTypes.LoginSuccess);
+        debug(`Login completed in ${performance.now() - loginStartTime}ms`);
         return { success: true };
       }
 
