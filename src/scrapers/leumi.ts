@@ -2,7 +2,8 @@ import moment, { type Moment } from 'moment';
 import { type HTTPResponse, type Page } from 'puppeteer';
 import { DOLLAR_CURRENCY, SHEKEL_CURRENCY } from '../constants';
 import { getDebug } from '../helpers/debug';
-import { clickButton, fillInput, pageEval, pageEvalAll, waitUntilElementFound } from '../helpers/elements-interactions';
+import { clickButton, fillInput, pageEvalAll, waitUntilElementFound } from '../helpers/elements-interactions';
+import { fetchGetWithinPage } from '../helpers/fetch';
 import { getRawTransaction } from '../helpers/transactions';
 import { generateTransactionUniqueId } from '../helpers/unique-id';
 import { waitForNavigation } from '../helpers/navigation';
@@ -30,10 +31,48 @@ const FILTERED_TRANSACTIONS_URL = `${BASE_URL}/ChannelWCF/Broker.svc/ProcessRequ
 const LEUMI_TRADING_URL = `${BASE_URL}/lti/lti-app/trade/portfolio`;
 const LEUMI_TRADING_HISTORY_URL = `${BASE_URL}/lti/lti-app/trade/orders/history`;
 const LEUMI_FOREIGN_TRANSACTIONS_URL = `${BASE_URL}/eBanking/ForeignCurrency/DisplayForeignAccountsActivity.aspx`;
+const SAVINGS_URL = `${BASE_URL}/uiapiproxy/v1/digital-retails/mobile/accounts/1/Deposits?operationList=true`;
 
 const DATE_FORMAT = 'DD.MM.YY';
 const ACCOUNT_BLOCKED_MSG = 'המנוי חסום';
 const INVALID_PASSWORD_MSG = 'אחד או יותר מפרטי ההזדהות שמסרת שגויים. ניתן לנסות שוב';
+const CHANGE_PASSWORD_MODAL_SELECTOR = 'form input[name="newPwd"]';
+
+interface SavingsDepositItem {
+  index: string;
+  depositId: string;
+  depositIndex: number;
+  depositSourceId: string;
+  type: number;
+  displayName: string;
+  productName: string;
+  friendlyAccountName: string;
+  deepLink: string;
+  isForeclosed: boolean;
+  asOfDate: string;
+  createDate: string;
+  exitPointDate: string;
+  currentBalance: number;
+  initialAmount: number | null;
+  installmentsSavingFlag: boolean;
+  marginRate: string;
+  productInterestType: string | null;
+  productLinkageType: string | null;
+  sourceSystem: string;
+  depositNumber: string;
+  relatedAccountNumber: string;
+  withdrawalRequestText: string | null;
+  WithdrawalAvailableFrequency: string | null;
+  depositOperationsItems: any[];
+}
+
+interface SavingsAccountData {
+  totalDepositsAndSavingsBalance: number;
+  previousBusinessDayDate: string;
+  depositsAndSavingsItems: SavingsDepositItem[];
+  operationsItemsTotal: string;
+  operationsListItems: any[];
+}
 
 function getPossibleLoginResults() {
   const urls: LoginOptions['possibleResults'] = {
@@ -63,7 +102,14 @@ function getPossibleLoginResults() {
         return errorMessage?.startsWith(ACCOUNT_BLOCKED_MSG);
       },
     ],
-    [LoginResults.ChangePassword]: ['https://hb2.bankleumi.co.il/authenticate'], // NOTICE - might not be relevant starting the Leumi re-design during 2022 Sep
+    [LoginResults.ChangePassword]: [
+      async options => {
+        if (!options || !options.page) {
+          throw new Error('missing page options argument');
+        }
+        return !!(await options.page.$(CHANGE_PASSWORD_MODAL_SELECTOR));
+      },
+    ],
   };
   return urls;
 }
@@ -190,6 +236,59 @@ async function fetchTransactionsForAccount(
   };
 }
 
+async function fetchRegularAccounts(
+  scraper: LeumiScraper,
+  page: Page,
+  startDate: Moment,
+  options: ScraperOptions,
+): Promise<TransactionsAccount[]> {
+  await scraper.navigateTo(TRANSACTIONS_URL);
+  return fetchTransactions(page, startDate, options);
+}
+
+async function getSavingsAccounts(page: Page, accountId: string): Promise<TransactionsAccount[]> {
+  debug('========== FETCHING SAVINGS ACCOUNTS ==========');
+  debug('Account: %s', accountId);
+
+  const accounts: TransactionsAccount[] = [];
+
+  try {
+    debug('Trying savings URL: %s', SAVINGS_URL);
+
+    const savingsData = await fetchGetWithinPage<SavingsAccountData>(page, SAVINGS_URL);
+    if (!savingsData || !savingsData.depositsAndSavingsItems || savingsData.depositsAndSavingsItems.length === 0) {
+      debug('No savings accounts found for account %s', accountId);
+      return [];
+    }
+    debug('✓ Found %d savings deposits', savingsData.depositsAndSavingsItems.length);
+
+    // Create a separate account for each individual deposit
+    for (const deposit of savingsData.depositsAndSavingsItems) {
+      const balance = deposit.currentBalance;
+      const savingsAccountNumber = `${accountId}-${deposit.depositId}`;
+
+      accounts.push({
+        accountNumber: savingsAccountNumber,
+        savingsAccount: true,
+        balance,
+        txns: [],
+      });
+
+      debug(
+        'Added savings account %s with balance %s (product: %s)',
+        savingsAccountNumber,
+        balance,
+        deposit.productName,
+      );
+    }
+  } catch (error) {
+    debug('  - Error fetching savings accounts: %s', error);
+  }
+
+  debug('Returning %d savings accounts', accounts.length);
+  return accounts;
+}
+
 async function fetchTransactions(
   page: Page,
   startDate: Moment,
@@ -224,16 +323,29 @@ async function fetchTransactions(
   return accounts;
 }
 
+async function fetchSavingsAccounts(
+  page: Page,
+  regularAccounts: TransactionsAccount[],
+): Promise<TransactionsAccount[]> {
+  const allSavingsAccounts: TransactionsAccount[] = [];
+  const regularAccountCount = regularAccounts.length;
+
+  for (let i = 0; i < regularAccountCount; i++) {
+    try {
+      const savingsAccounts = await getSavingsAccounts(page, regularAccounts[i].accountNumber);
+      allSavingsAccounts.push(...savingsAccounts);
+      debug('Added %d savings accounts to results', savingsAccounts.length);
+    } catch (error) {
+      debug('Error fetching savings accounts for %s: %s', regularAccounts[i].accountNumber, error);
+    }
+  }
+
+  return allSavingsAccounts;
+}
+
 async function navigateToLogin(page: Page): Promise<void> {
-  const loginButtonSelector = '.enter_account';
-  debug('wait for homepage to click on login button');
-  await waitUntilElementFound(page, loginButtonSelector);
-  debug('navigate to login page');
-  const loginUrl = await pageEval(page, loginButtonSelector, null, element => {
-    return (element as any).href;
-  });
-  debug(`navigating to page (${loginUrl})`);
-  await page.goto(loginUrl);
+  debug('navigating directly to login page');
+  await page.goto('https://hb2.bankleumi.co.il/authenticate/logon');
   debug('waiting for page to be loaded (networkidle2)');
   await waitForNavigation(page, { waitUntil: 'networkidle2' });
   debug('waiting for components of login to enter credentials');
@@ -249,7 +361,7 @@ async function waitForPostLogin(page: Page): Promise<void> {
     waitUntilElementFound(page, 'a[title="דלג לחשבון"]', true, 60000),
     waitUntilElementFound(page, 'div.main-content', false, 60000),
     page.waitForSelector(`xpath//div[contains(string(),"${INVALID_PASSWORD_MSG}")]`),
-    waitUntilElementFound(page, 'form[action="/changepassword"]', true, 60000), // not sure if they kept this one
+    waitUntilElementFound(page, CHANGE_PASSWORD_MODAL_SELECTOR, true, 60000),
   ]);
 }
 
@@ -380,7 +492,7 @@ async function setStartingDateForPortfolioTransactions(page: Page, startDate: mo
   await hangProcess(1000);
 
   debug('Selected period:', selectedPeriod);
-  if (selectedPeriod != 'לפי תאריכים') {
+  if (selectedPeriod !== 'לפי תאריכים') {
     debug('Selected period is not "לפי תאריכים", selecting "לפי תאריכים" option to enter custom dates');
     await page.waitForSelector('div.select-period-block');
     await clickByXPath(page, 'xpath///div[contains(@class, "select-period-block")]');
@@ -403,7 +515,7 @@ async function setStartingDateForPortfolioTransactions(page: Page, startDate: mo
   await page.waitForSelector(`mat-calendar td[aria-label="${year}"]`);
   await clickByXPath(page, `xpath///mat-calendar//td[contains(@aria-label, "${year}")]`);
 
-  const month = '01/' + startDate.format('MM/YY');
+  const month = `01/${startDate.format('MM/YY')}`;
   debug('selecting month:', month);
   await page.waitForSelector(`mat-calendar td[aria-label="${month}"]`);
   await clickByXPath(page, `xpath///mat-calendar//td[contains(@aria-label, "${month}")]`);
@@ -415,7 +527,7 @@ async function setStartingDateForPortfolioTransactions(page: Page, startDate: mo
 }
 
 function mapCurrency(raw: string): string {
-  if (raw == "דולר ארה''ב") {
+  if (raw === "דולר ארה''ב") {
     return DOLLAR_CURRENCY;
   }
 
@@ -438,7 +550,7 @@ function cellTextToISODate(cellText: string): string {
     const date = new Date(year, month, day);
     return date.toISOString();
   } catch (error) {
-    console.error(`Error parsing date ${cellText}:`, error);
+    debug('Error parsing date %s: %s', cellText, error);
     return '';
   }
 }
@@ -702,9 +814,9 @@ class LeumiScraper extends BaseScraperWithBrowser<ScraperSpecificCredentials> {
   async fetchData(): Promise<ScraperScrapingResult> {
     const startMoment = this.getStartMoment();
 
-    await this.navigateTo(TRANSACTIONS_URL);
-
-    const accounts = await fetchTransactions(this.page, startMoment, this.options);
+    const accounts = await fetchRegularAccounts(this, this.page, startMoment, this.options);
+    const savingsAccounts = await fetchSavingsAccounts(this.page, accounts);
+    accounts.push(...savingsAccounts);
 
     return {
       success: true,

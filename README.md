@@ -5,8 +5,6 @@
 [![NPM](https://nodei.co/npm/israeli-bank-scrapers.png)](https://nodei.co/npm/israeli-bank-scrapers/)
 
 [![npm version](https://badge.fury.io/js/israeli-bank-scrapers.svg)](https://badge.fury.io/js/israeli-bank-scrapers)
-[![dependencies Status](https://david-dm.org/eshaham/israeli-bank-scrapers/status.svg)](https://david-dm.org/eshaham/israeli-bank-scrapers)
-[![devDependencies Status](https://david-dm.org/eshaham/israeli-bank-scrapers/dev-status.svg)](https://david-dm.org/eshaham/israeli-bank-scrapers?type=dev)
 [![Discord](https://img.shields.io/discord/924617301209260103?logo=discord)](https://discord.gg/2UvGM7aX4p)
 
 > Important!
@@ -35,7 +33,7 @@ Currently only the following banks are supported:
 - Behatsdaa - [בהצדעה](behatsdaa.org.il) (thanks [@daniel-hauser](https://github.com/daniel-hauser))
 
 # Prerequisites
-To use this you will need to have [Node.js](https://nodejs.org) >= 22.12.0 installed.
+To use this you will need to have [Node.js](https://nodejs.org) >= 22.22.2 installed.
 
 # Getting started
 To use these scrapers you'll need to install the package from npm:
