@@ -1,7 +1,7 @@
 import { SCRAPERS } from '../definitions';
 import { exportTransactions, extendAsyncTimeout, getTestsConfig, maybeTestCompanyAPI } from '../tests/tests-utils';
 import { LoginResults } from './base-scraper-with-browser';
-import VisaCalScraper from './visa-cal';
+import VisaCalScraper, { convertParsedDataToStatements } from './visa-cal';
 
 const COMPANY_ID = 'visaCal'; // TODO this property should be hard-coded in the provider
 const testsConfig = getTestsConfig();
@@ -15,6 +15,35 @@ describe('VisaCal legacy scraper', () => {
     expect(SCRAPERS.visaCal).toBeDefined();
     expect(SCRAPERS.visaCal.loginFields).toContain('username');
     expect(SCRAPERS.visaCal.loginFields).toContain('password');
+  });
+
+  test('should expose the authoritative statement debit separately from its transaction basket', () => {
+    const parsedData = [
+      {
+        result: {
+          bankAccounts: [
+            {
+              debitDates: [
+                {
+                  date: '2026-08-10T00:00:00.000Z',
+                  totalBasketAmount: 31131.79,
+                  totalDebits: [{ currencySymbol: '₪', amount: 34208.45 }],
+                },
+              ],
+            },
+          ],
+        },
+      },
+    ] as unknown as Parameters<typeof convertParsedDataToStatements>[0];
+
+    expect(convertParsedDataToStatements(parsedData)).toEqual([
+      {
+        date: '2026-08-10T00:00:00.000Z',
+        amount: -34208.45,
+        currency: '₪',
+        transactionAmount: -31131.79,
+      },
+    ]);
   });
 
   maybeTestCompanyAPI(COMPANY_ID, config => config.companyAPI.invalidPassword)(

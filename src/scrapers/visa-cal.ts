@@ -11,6 +11,7 @@ import {
   CardType,
   TransactionStatuses,
   TransactionTypes,
+  type AccountStatement,
   type Transaction,
   type TransactionsAccount,
 } from '../transactions';
@@ -218,6 +219,27 @@ function isCardPendingTransactionDetails(
   result: CardPendingTransactionDetails | CardTransactionDetailsError,
 ): result is CardPendingTransactionDetails {
   return (result as CardPendingTransactionDetails).result !== undefined;
+}
+
+export function convertParsedDataToStatements(data: CardTransactionDetails[]): AccountStatement[] {
+  const statements = new Map<string, AccountStatement>();
+
+  for (const debitDate of data
+    .flatMap(monthData => monthData.result.bankAccounts)
+    .flatMap(account => account.debitDates)) {
+    for (const totalDebit of debitDate.totalDebits) {
+      const date = moment(debitDate.date).toISOString();
+      const statement = {
+        date,
+        amount: -Math.abs(totalDebit.amount),
+        currency: totalDebit.currencySymbol,
+        ...(debitDate.totalDebits.length === 1 ? { transactionAmount: -Math.abs(debitDate.totalBasketAmount) } : {}),
+      };
+      statements.set(`${date}:${totalDebit.currencySymbol}`, statement);
+    }
+  }
+
+  return [...statements.values()].sort((left, right) => left.date.localeCompare(right.date));
 }
 
 async function getLoginFrame(page: Page) {
@@ -601,6 +623,7 @@ class VisaCalScraper extends BaseScraperWithBrowser<ScraperSpecificCredentials> 
     }
 
     const transactions = convertParsedDataToTransactions(allMonthsData, pendingData, this.options);
+    const statements = convertParsedDataToStatements(allMonthsData);
 
     debug('filter out old transactions');
     const txns =
@@ -617,6 +640,7 @@ class VisaCalScraper extends BaseScraperWithBrowser<ScraperSpecificCredentials> 
       accountNumber: card.last4Digits,
       cardType,
       cardFrame: accountGroup?.frameLimitForCardAmount,
+      statements,
     };
 
     return result;

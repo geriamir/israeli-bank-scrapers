@@ -6,7 +6,15 @@ export interface TransactionsAccount {
   cardType?: CardType;
   currency?: string;
   savingsAccount?: boolean;
+  statements?: AccountStatement[];
   txns: Transaction[];
+}
+
+export interface AccountStatement {
+  date: string;
+  amount: number;
+  currency: string;
+  transactionAmount?: number;
 }
 
 export enum CardType {
