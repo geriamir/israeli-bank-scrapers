@@ -1,7 +1,7 @@
 import moment, { type Moment } from 'moment';
 import { type Page } from 'puppeteer';
 import { ScraperProgressTypes } from '../../definitions';
-import { interceptionPriorities, maskHeadlessUserAgent } from '../../helpers/browser';
+import { interceptionPriorities, maskBrowserAutomation } from '../../helpers/browser';
 import getAllMonthMoments from '../../helpers/dates';
 import { getDebug } from '../../helpers/debug';
 import { fetchPostWithinPage } from '../../helpers/fetch';
@@ -204,7 +204,7 @@ class IsracardGroupScraper extends BaseScraperWithBrowser<ScraperSpecificCredent
       }
     });
 
-    await maskHeadlessUserAgent(this.page);
+    await maskBrowserAutomation(this.page);
     await this.page.evaluateOnNewDocument(() => {
       Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
     });
