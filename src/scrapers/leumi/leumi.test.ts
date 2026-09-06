@@ -1,9 +1,9 @@
-import { LoginResults } from './base-scraper-with-browser';
+import { LoginResults } from '../base-scraper-with-browser';
 import LeumiScraper from './leumi';
-import { SHEKEL_CURRENCY } from '../constants';
-import { SCRAPERS } from '../definitions';
-import { getDebug } from '../helpers/debug';
-import { exportTransactions, extendAsyncTimeout, getTestsConfig, maybeTestCompanyAPI } from '../tests/tests-utils';
+import { SHEKEL_CURRENCY } from '../../constants';
+import { SCRAPERS } from '../../definitions';
+import { getDebug } from '../../helpers/debug';
+import { exportTransactions, extendAsyncTimeout, getTestsConfig, maybeTestCompanyAPI } from '../../tests/tests-utils';
 
 const COMPANY_ID = 'leumi'; // TODO this property should be hard-coded in the provider
 const testsConfig = getTestsConfig();
