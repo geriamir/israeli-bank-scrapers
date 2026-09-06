@@ -1,6 +1,11 @@
 import moment from 'moment';
 import { type ScraperOptions } from '../interface';
-import { getForeignTransactionAmount, mapForeignCurrency, mapForeignTransaction, parseForeignAmount } from './leumi-forex';
+import {
+  getForeignTransactionAmount,
+  mapForeignCurrency,
+  mapForeignTransaction,
+  parseForeignAmount,
+} from './leumi-forex';
 
 describe('mapForeignCurrency', () => {
   test('matches a real double-quote label observed on the live page', () => {
