@@ -5,7 +5,6 @@ import { interceptionPriorities, maskBrowserAutomation } from '../../helpers/bro
 import getAllMonthMoments from '../../helpers/dates';
 import { getDebug } from '../../helpers/debug';
 import { fetchPostWithinPage } from '../../helpers/fetch';
-import { chunk } from '../../helpers/arrays';
 import { filterOldTransactions, fixInstallments } from '../../helpers/transactions';
 import { randomDelay } from '../../helpers/waiting';
 import { TransactionStatuses, type Transaction, type TransactionsAccount } from '../../transactions';
@@ -23,6 +22,7 @@ import {
   getCardFrame,
   guessIsIsraelDeal,
   isApprovedTransactionSettled,
+  isTransferDetails,
   type ScrapedCard,
   type ScrapedCardListResponse,
   type ScrapedLoginValidation,
@@ -193,8 +193,9 @@ async function fetchTransactionDetails(
 }
 
 // Settled vouchers carry no merchant category, so each one needs its own GetTransactionDetails
-// call. Best effort: a transaction whose details can't be read is kept as-is.
-async function addTransactionDetails(
+// call, unless the merchant's category is already in the category cache. Best effort: a
+// transaction whose details can't be read is kept as-is.
+export async function addTransactionDetails(
   page: Page,
   transactionDetailsUrl: string,
   transactionsCompanyCode: number,
@@ -203,16 +204,40 @@ async function addTransactionDetails(
   options: ScraperOptions,
 ): Promise<Transaction[]> {
   const shouldFetch = options.shouldFetchAdditionalTransactionInformation ?? (() => true);
-  const toFetch = txns.filter(
+  // Filled only from details, which say whether a transaction is a transfer: a pending
+  // transaction's category doesn't, and a cached transfer would lose its beneficiary.
+  const cache = options.additionalTransactionInformationCategoryCache ?? new Map<string, string>();
+
+  let queue = txns.filter(
     txn => txn.status === TransactionStatuses.Completed && !!txn.identifier && shouldFetch(txn, card.cardSuffix),
   );
-  debug(`fetching details for ${toFetch.length} of ${txns.length} transactions on card ${card.cardSuffix}`);
+  debug(`getting details for ${queue.length} of ${txns.length} transactions on card ${card.cardSuffix}`);
 
   const detailed = new Map<Transaction, Transaction>();
-  for (const [index, batch] of chunk(toFetch, RATE_LIMIT.DETAILS_BATCH_SIZE).entries()) {
-    if (index > 0) {
+  let calls = 0;
+  while (queue.length) {
+    // One transaction per merchant in a batch, so the next of its transactions can use the cache
+    const batch: Transaction[] = [];
+    const rest: Transaction[] = [];
+    queue.forEach(txn => {
+      const cachedCategory = cache.get(txn.description);
+      if (cachedCategory) {
+        detailed.set(txn, { ...txn, category: cachedCategory });
+      } else if (batch.length < RATE_LIMIT.DETAILS_BATCH_SIZE && !batch.some(b => b.description === txn.description)) {
+        batch.push(txn);
+      } else {
+        rest.push(txn);
+      }
+    });
+    queue = rest;
+    if (!batch.length) {
+      break;
+    }
+
+    if (calls > 0) {
       await randomDelay(RATE_LIMIT.DETAILS_SLEEP_BETWEEN, RATE_LIMIT.DETAILS_SLEEP_BETWEEN + 500);
     }
+    calls += batch.length;
     await Promise.all(
       batch.map(async txn => {
         try {
@@ -220,10 +245,15 @@ async function addTransactionDetails(
           const details =
             (await fetchTransactionDetails(page, transactionDetailsUrl, transactionsCompanyCode, card, txn, isIsraelDeal)) ??
             (await fetchTransactionDetails(page, transactionDetailsUrl, transactionsCompanyCode, card, txn, !isIsraelDeal));
-          if (details) {
-            detailed.set(txn, applyTransactionDetails(txn, details, options));
-          } else {
+          if (!details) {
             debug(`no details for transaction ${txn.identifier} on card ${card.cardSuffix}`);
+            return;
+          }
+          const result = applyTransactionDetails(txn, details, options);
+          detailed.set(txn, result);
+          // A transfer's memo names its own beneficiary, so its details are never reused
+          if (result.category && !isTransferDetails(details)) {
+            cache.set(txn.description, result.category);
           }
         } catch (e) {
           debug(`failed to fetch details for transaction ${txn.identifier} on card ${card.cardSuffix}`, e);
@@ -231,6 +261,7 @@ async function addTransactionDetails(
       }),
     );
   }
+  debug(`made ${calls} details calls for card ${card.cardSuffix}`);
 
   return txns.map(txn => detailed.get(txn) ?? txn);
 }

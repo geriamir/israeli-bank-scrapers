@@ -11,6 +11,7 @@ import {
   getVoucherInstallments,
   guessIsIsraelDeal,
   isApprovedTransactionSettled,
+  isTransferDetails,
   type ScrapedApprovedTransaction,
   type ScrapedCard,
   type ScrapedTransactionDetails,
@@ -305,6 +306,13 @@ describe('transaction details', () => {
     expect(getDetailsMemo('', transfer)).toBe('ישראל ישראלי שכר דירה');
     expect(getDetailsMemo('שכר דירה', transfer)).toBe('שכר דירה ישראל ישראלי');
     expect(getDetailsMemo('memo', details)).toBe('memo');
+  });
+
+  test('is a transfer when it names a beneficiary or a reason', () => {
+    expect(isTransferDetails(details)).toBe(false);
+    expect(isTransferDetails({ ...details, transferBeneficiary: ' ' })).toBe(false);
+    expect(isTransferDetails({ ...details, transferBeneficiary: 'ישראל ישראלי' })).toBe(true);
+    expect(isTransferDetails({ ...details, transferReason: 'שכר דירה' })).toBe(true);
   });
 
   test('applies the category and memo, keeping the existing category when details have none', () => {

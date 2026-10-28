@@ -155,6 +155,14 @@ export type ScraperOptions = ScraperBrowserOptions & {
   shouldFetchAdditionalTransactionInformation?: (transaction: Transaction, accountNumber: string) => boolean;
 
   /**
+   * With `additionalTransactionInformation`, merchant description -> category. A transaction whose
+   * merchant is in it takes the category from it with no extra request, and the categories the scrape
+   * learns are added to it (transfers excepted), so a caller can keep it between scrapes.
+   * Currently honored by isracard and amex.
+   */
+  additionalTransactionInformationCategoryCache?: Map<string, string>;
+
+  /**
    * Include the raw transaction object as received from the scraper source for debugging purposes.
    * @default false
    */

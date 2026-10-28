@@ -243,6 +243,10 @@ export function getDetailsMemo(memo: string | undefined, details: ScrapedTransac
   return [...new Set(parts)].join(' ');
 }
 
+export function isTransferDetails(details: ScrapedTransactionDetails): boolean {
+  return !!(details.transferBeneficiary?.trim() || details.transferReason?.trim());
+}
+
 export function applyTransactionDetails(
   txn: Transaction,
   details: ScrapedTransactionDetails,
