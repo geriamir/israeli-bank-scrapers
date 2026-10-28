@@ -1,6 +1,6 @@
 import { type BrowserContext, type Browser, type Page } from 'puppeteer';
 import { type CompanyTypes, type ScraperProgressTypes } from '../definitions';
-import { type TransactionsAccount } from '../transactions';
+import { type Transaction, type TransactionsAccount } from '../transactions';
 import { type ErrorResult, type ScraperErrorTypes } from './errors';
 
 // TODO: Remove this type when the scraper 'factory' will return concrete scraper types
@@ -146,6 +146,13 @@ export type ScraperOptions = ScraperBrowserOptions & {
    * Please note: It will take more time to finish the process.
    */
   additionalTransactionInformation?: boolean;
+
+  /**
+   * With `additionalTransactionInformation`, decides per transaction whether the extra request is made,
+   * e.g. to skip transactions the caller already stored. Fetches for every transaction when not set.
+   * Currently honored by isracard and amex.
+   */
+  shouldFetchAdditionalTransactionInformation?: (transaction: Transaction, accountNumber: string) => boolean;
 
   /**
    * Include the raw transaction object as received from the scraper source for debugging purposes.

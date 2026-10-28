@@ -1,17 +1,23 @@
 import moment from 'moment';
 import {
+  applyTransactionDetails,
   convertApprovedTransaction,
   convertVoucher,
   getCardBalance,
   getCardBalanceDate,
   getCardFrame,
+  getDetailsCategory,
+  getDetailsMemo,
   getVoucherInstallments,
+  guessIsIsraelDeal,
   isApprovedTransactionSettled,
   type ScrapedApprovedTransaction,
   type ScrapedCard,
+  type ScrapedTransactionDetails,
   type ScrapedVoucher,
 } from './base-isracard-utils';
 import { type ScraperOptions } from '../interface';
+import { type Transaction } from '../../transactions';
 
 describe('getCardBalance', () => {
   test('negates limitUsed (a positive "amount used" becomes a negative balance)', () => {
@@ -220,12 +226,17 @@ describe('convertVoucher', () => {
     expect(transaction.date).toBe(moment('10/08/2026 00:00:00', 'DD/MM/YYYY HH:mm:ss').toISOString());
   });
 
-  test('trims the business name, memo, and category', () => {
+  test('trims the business name and memo', () => {
     const transaction = convertVoucher(voucher, processedDateIso);
 
     expect(transaction.description).toBe('Amazon');
     expect(transaction.memo).toBe('memo');
-    expect(transaction.category).toBe('קניות');
+  });
+
+  test('leaves the category unset, since transactionDescription is the deal kind', () => {
+    const transaction = convertVoucher({ ...voucher, transactionDescription: 'עסקאות רגילות' }, processedDateIso);
+
+    expect(transaction.category).toBeUndefined();
   });
 
   test('is an installment transaction only when both installment fields are set', () => {
@@ -247,5 +258,70 @@ describe('convertVoucher', () => {
 
     expect(withRaw.rawTransaction).toBeDefined();
     expect(withoutRaw.rawTransaction).toBeUndefined();
+  });
+});
+
+describe('guessIsIsraelDeal', () => {
+  test('treats a shekel deal as Israeli and any other currency as abroad', () => {
+    expect(guessIsIsraelDeal({ originalCurrency: 'ILS' } as Transaction)).toBe(true);
+    expect(guessIsIsraelDeal({ originalCurrency: 'USD' } as Transaction)).toBe(false);
+  });
+});
+
+describe('transaction details', () => {
+  const details: ScrapedTransactionDetails = {
+    parentBranchDescription: 'רכב ותחבורה',
+    branchDescription: ' חניוני רכב ',
+    secondBranchDescription: 'רכב - שירותים ואביזרים',
+    transferBeneficiary: null,
+    transferReason: null,
+  };
+  const txn = {
+    identifier: '383707770',
+    description: 'פנגו חשבונית חודשית',
+    memo: '',
+    status: 'completed',
+  } as Transaction;
+
+  test('takes the category from the branch, falling back to the second and parent branches', () => {
+    expect(getDetailsCategory(details)).toBe('חניוני רכב');
+    expect(getDetailsCategory({ ...details, branchDescription: '  ' })).toBe('רכב - שירותים ואביזרים');
+    expect(getDetailsCategory({ ...details, branchDescription: null, secondBranchDescription: null })).toBe(
+      'רכב ותחבורה',
+    );
+    expect(
+      getDetailsCategory({
+        ...details,
+        branchDescription: null,
+        secondBranchDescription: null,
+        parentBranchDescription: null,
+      }),
+    ).toBeUndefined();
+  });
+
+  test('adds the transfer beneficiary and reason to the memo, without repeating it', () => {
+    const transfer = { ...details, transferBeneficiary: 'ישראל ישראלי', transferReason: 'שכר דירה' };
+
+    expect(getDetailsMemo('', transfer)).toBe('ישראל ישראלי שכר דירה');
+    expect(getDetailsMemo('שכר דירה', transfer)).toBe('שכר דירה ישראל ישראלי');
+    expect(getDetailsMemo('memo', details)).toBe('memo');
+  });
+
+  test('applies the category and memo, keeping the existing category when details have none', () => {
+    const noCategory = { ...details, branchDescription: null, secondBranchDescription: null, parentBranchDescription: null };
+
+    expect(applyTransactionDetails(txn, details)).toEqual({ ...txn, category: 'חניוני רכב', memo: '' });
+    expect(applyTransactionDetails({ ...txn, category: 'x' }, noCategory).category).toBe('x');
+  });
+
+  test('appends the details to the raw transaction only when requested', () => {
+    const withRaw = applyTransactionDetails(
+      { ...txn, rawTransaction: { seqVoucherNumber: '383707770' } },
+      details,
+      { includeRawTransaction: true } as ScraperOptions,
+    );
+
+    expect(Array.isArray(withRaw.rawTransaction)).toBe(true);
+    expect(applyTransactionDetails(txn, details).rawTransaction).toBeUndefined();
   });
 });

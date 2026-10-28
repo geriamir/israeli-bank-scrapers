@@ -105,6 +105,21 @@ export interface ScrapedTransactionsResponse {
   isSuccess: boolean;
 }
 
+export interface ScrapedTransactionDetails {
+  parentBranchDescription: string | null;
+  branchDescription: string | null;
+  secondBranchDescription: string | null;
+  transferBeneficiary: string | null;
+  transferReason: string | null;
+}
+
+export interface ScrapedTransactionDetailsResponse {
+  data: ScrapedTransactionDetails | null;
+  errorCode: string;
+  errorDescription: string | null;
+  isSuccess: boolean;
+}
+
 export function getCardBalance(card: ScrapedCard): number | undefined {
   if (!card.limitData) {
     return undefined;
@@ -195,13 +210,52 @@ export function convertVoucher(
     chargedCurrency: SHEKEL_CURRENCY,
     description: (voucher.businessName || '').trim(),
     memo: (voucher.moreInfo || '').trim(),
-    category: voucher.transactionDescription?.trim() || undefined,
+    // `transactionDescription` is the deal kind ("עסקאות רגילות"), not a merchant category -
+    // the category only comes from GetTransactionDetails (see applyTransactionDetails).
     installments,
     status: TransactionStatuses.Completed,
   };
 
   if (options?.includeRawTransaction) {
     result.rawTransaction = getRawTransaction(voucher);
+  }
+
+  return result;
+}
+
+// GetTransactionDetails needs to know which list a voucher came from, which the merged
+// voucher list doesn't say; a shekel deal is the likely Israeli one.
+export function guessIsIsraelDeal(txn: Transaction): boolean {
+  return txn.originalCurrency === SHEKEL_CURRENCY;
+}
+
+export function getDetailsCategory(details: ScrapedTransactionDetails): string | undefined {
+  const category = [details.branchDescription, details.secondBranchDescription, details.parentBranchDescription]
+    .map(value => value?.trim())
+    .find(value => !!value);
+  return category || undefined;
+}
+
+export function getDetailsMemo(memo: string | undefined, details: ScrapedTransactionDetails): string {
+  const parts = [memo, details.transferBeneficiary, details.transferReason]
+    .map(value => (value || '').trim())
+    .filter(value => !!value);
+  return [...new Set(parts)].join(' ');
+}
+
+export function applyTransactionDetails(
+  txn: Transaction,
+  details: ScrapedTransactionDetails,
+  options?: ScraperOptions,
+): Transaction {
+  const result: Transaction = {
+    ...txn,
+    category: getDetailsCategory(details) ?? txn.category,
+    memo: getDetailsMemo(txn.memo, details),
+  };
+
+  if (options?.includeRawTransaction) {
+    result.rawTransaction = getRawTransaction(details, txn);
   }
 
   return result;

@@ -5,13 +5,15 @@ import { interceptionPriorities, maskBrowserAutomation } from '../../helpers/bro
 import getAllMonthMoments from '../../helpers/dates';
 import { getDebug } from '../../helpers/debug';
 import { fetchPostWithinPage } from '../../helpers/fetch';
+import { chunk } from '../../helpers/arrays';
 import { filterOldTransactions, fixInstallments } from '../../helpers/transactions';
 import { randomDelay } from '../../helpers/waiting';
-import { type Transaction, type TransactionsAccount } from '../../transactions';
+import { TransactionStatuses, type Transaction, type TransactionsAccount } from '../../transactions';
 import { BaseScraperWithBrowser } from '../base-scraper-with-browser';
 import { ScraperErrorTypes } from '../errors';
 import { type ScraperOptions, type ScraperScrapingResult } from '../interface';
 import {
+  applyTransactionDetails,
   BILLING_MONTH_FORMAT,
   convertApprovedTransaction,
   convertVoucher,
@@ -19,11 +21,14 @@ import {
   getCardBalance,
   getCardBalanceDate,
   getCardFrame,
+  guessIsIsraelDeal,
   isApprovedTransactionSettled,
   type ScrapedCard,
   type ScrapedCardListResponse,
   type ScrapedLoginValidation,
   type ScrapedMonthlyBillingResponse,
+  type ScrapedTransactionDetails,
+  type ScrapedTransactionDetailsResponse,
   type ScrapedTransactionsResponse,
 } from './base-isracard-utils';
 
@@ -34,6 +39,8 @@ const ID_TYPE = '1';
 
 const RATE_LIMIT = {
   SLEEP_BETWEEN: 2500,
+  DETAILS_BATCH_SIZE: 5,
+  DETAILS_SLEEP_BETWEEN: 1000,
 } as const;
 
 const JSON_HEADERS = { 'Content-Type': 'application/json', Accept: 'application/json' };
@@ -162,6 +169,72 @@ async function fetchMonthTransactions(
   return txns;
 }
 
+async function fetchTransactionDetails(
+  page: Page,
+  transactionDetailsUrl: string,
+  transactionsCompanyCode: number,
+  card: ScrapedCard,
+  txn: Transaction,
+  isIsraelDeal: boolean,
+): Promise<ScrapedTransactionDetails | null> {
+  const response = await fetchPostWithinPage<ScrapedTransactionDetailsResponse>(
+    page,
+    transactionDetailsUrl,
+    {
+      cardSuffix: card.cardSuffix,
+      companyCode: transactionsCompanyCode,
+      isIsraelDeal,
+      isPartner: card.isPartner,
+      seqVoucherNumber: String(txn.identifier),
+    },
+    JSON_HEADERS,
+  );
+  return response?.isSuccess && response.data ? response.data : null;
+}
+
+// Settled vouchers carry no merchant category, so each one needs its own GetTransactionDetails
+// call. Best effort: a transaction whose details can't be read is kept as-is.
+async function addTransactionDetails(
+  page: Page,
+  transactionDetailsUrl: string,
+  transactionsCompanyCode: number,
+  card: ScrapedCard,
+  txns: Transaction[],
+  options: ScraperOptions,
+): Promise<Transaction[]> {
+  const shouldFetch = options.shouldFetchAdditionalTransactionInformation ?? (() => true);
+  const toFetch = txns.filter(
+    txn => txn.status === TransactionStatuses.Completed && !!txn.identifier && shouldFetch(txn, card.cardSuffix),
+  );
+  debug(`fetching details for ${toFetch.length} of ${txns.length} transactions on card ${card.cardSuffix}`);
+
+  const detailed = new Map<Transaction, Transaction>();
+  for (const [index, batch] of chunk(toFetch, RATE_LIMIT.DETAILS_BATCH_SIZE).entries()) {
+    if (index > 0) {
+      await randomDelay(RATE_LIMIT.DETAILS_SLEEP_BETWEEN, RATE_LIMIT.DETAILS_SLEEP_BETWEEN + 500);
+    }
+    await Promise.all(
+      batch.map(async txn => {
+        try {
+          const isIsraelDeal = guessIsIsraelDeal(txn);
+          const details =
+            (await fetchTransactionDetails(page, transactionDetailsUrl, transactionsCompanyCode, card, txn, isIsraelDeal)) ??
+            (await fetchTransactionDetails(page, transactionDetailsUrl, transactionsCompanyCode, card, txn, !isIsraelDeal));
+          if (details) {
+            detailed.set(txn, applyTransactionDetails(txn, details, options));
+          } else {
+            debug(`no details for transaction ${txn.identifier} on card ${card.cardSuffix}`);
+          }
+        } catch (e) {
+          debug(`failed to fetch details for transaction ${txn.identifier} on card ${card.cardSuffix}`, e);
+        }
+      }),
+    );
+  }
+
+  return txns.map(txn => detailed.get(txn) ?? txn);
+}
+
 type ScraperSpecificCredentials = { id: string; password: string; card6Digits: string };
 
 class IsracardGroupScraper extends BaseScraperWithBrowser<ScraperSpecificCredentials> {
@@ -189,6 +262,17 @@ class IsracardGroupScraper extends BaseScraperWithBrowser<ScraperSpecificCredent
 
   private get transactionsUrl(): string {
     return `${this.webBaseUrl}/ocp/transactions/DigitalV3.Transactions/GetTransactionsList`;
+  }
+
+  private get transactionDetailsUrl(): string {
+    return `${this.webBaseUrl}/ocp/transactiondetails/DigitalV3.TransactionDetails/GetTransactionDetails`;
+  }
+
+  private get shouldFetchTransactionDetails(): boolean {
+    return (
+      !!this.options.additionalTransactionInformation &&
+      !this.options.optInFeatures?.includes('isracard-amex:skipAdditionalTransactionInformation')
+    );
   }
 
   async login(credentials: ScraperSpecificCredentials): Promise<ScraperScrapingResult> {
@@ -334,7 +418,8 @@ class IsracardGroupScraper extends BaseScraperWithBrowser<ScraperSpecificCredent
       }
     }
 
-    const accounts: TransactionsAccount[] = cards.map(card => {
+    const accounts: TransactionsAccount[] = [];
+    for (const card of cards) {
       let txns = txnsByCard[card.cardSuffix];
       if (!this.options.combineInstallments) {
         txns = fixInstallments(txns);
@@ -342,14 +427,24 @@ class IsracardGroupScraper extends BaseScraperWithBrowser<ScraperSpecificCredent
       if (this.options.outputData?.enableTransactionsFilterByDate ?? true) {
         txns = filterOldTransactions(txns, startMoment, this.options.combineInstallments || false);
       }
-      return {
+      if (this.shouldFetchTransactionDetails) {
+        txns = await addTransactionDetails(
+          this.page,
+          this.transactionDetailsUrl,
+          this.transactionsCompanyCode,
+          card,
+          txns,
+          this.options,
+        );
+      }
+      accounts.push({
         accountNumber: card.cardSuffix,
         balance: getCardBalance(card),
         balanceDate: getCardBalanceDate(card),
         cardFrame: getCardFrame(card),
         txns,
-      };
-    });
+      });
+    }
 
     debug(`fetchData completed in ${performance.now() - fetchStartTime}ms`);
 
