@@ -2,6 +2,7 @@ import moment from 'moment';
 import {
   convertApprovedTransaction,
   convertVoucher,
+  describeLoginValidationFailure,
   getCardBalance,
   getCardBalanceDate,
   getCardFrame,
@@ -9,9 +10,45 @@ import {
   isApprovedTransactionSettled,
   type ScrapedApprovedTransaction,
   type ScrapedCard,
+  type ScrapedLoginValidation,
   type ScrapedVoucher,
 } from './base-isracard-utils';
 import { type ScraperOptions } from '../interface';
+
+describe('describeLoginValidationFailure', () => {
+  test('says so when there was no response body', () => {
+    expect(describeLoginValidationFailure(null)).toBe('empty response');
+  });
+
+  test('gives the status code and field names of a rejected validation', () => {
+    const result = { Header: { Status: '-1', Message: 'rejected' } } as unknown as ScrapedLoginValidation;
+
+    expect(describeLoginValidationFailure(result)).toBe(
+      'Header.Status="-1"; ValidateIdDataBean missing; fields: Header; Header fields: Status,Message',
+    );
+  });
+
+  test('copes with a response that has no Header', () => {
+    const result = { Error: 'x' } as unknown as ScrapedLoginValidation;
+
+    expect(describeLoginValidationFailure(result)).toBe(
+      'Header.Status=missing; ValidateIdDataBean missing; fields: Error; Header fields: ',
+    );
+  });
+
+  test('leaves out every value but the status, which it truncates', () => {
+    const result = {
+      Header: { Status: '1'.repeat(50), Message: 'secret-message' },
+      ValidateIdDataBean: { userName: 'secret-user', returnCode: '1' },
+    } as unknown as ScrapedLoginValidation;
+
+    const description = describeLoginValidationFailure(result);
+
+    expect(description).not.toContain('secret');
+    expect(description).not.toContain('1'.repeat(21));
+    expect(description).toContain('ValidateIdDataBean present');
+  });
+});
 
 describe('getCardBalance', () => {
   test('negates limitUsed (a positive "amount used" becomes a negative balance)', () => {

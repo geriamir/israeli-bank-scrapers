@@ -16,6 +16,7 @@ import {
   convertApprovedTransaction,
   convertVoucher,
   DATE_FORMAT,
+  describeLoginValidationFailure,
   getCardBalance,
   getCardBalanceDate,
   getCardFrame,
@@ -231,7 +232,7 @@ class IsracardGroupScraper extends BaseScraperWithBrowser<ScraperSpecificCredent
       validateResult.Header.Status !== '1' ||
       !validateResult.ValidateIdDataBean
     ) {
-      throw new Error('unknown error during login');
+      throw new Error(`unknown error during login (${describeLoginValidationFailure(validateResult)})`);
     }
 
     const validateReturnCode = validateResult.ValidateIdDataBean.returnCode;
