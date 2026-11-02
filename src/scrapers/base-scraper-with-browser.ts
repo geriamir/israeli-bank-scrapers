@@ -9,6 +9,14 @@ import { type ScraperCredentials, type ScraperScrapingResult } from './interface
 
 const debug = getDebug('base-scraper-with-browser');
 
+// Without this flag Chrome reports navigator.webdriver = true while remote debugging is attached,
+// which bot-detection (e.g. Isracard's Cloudflare, see upstream #1181) uses to block the scraper.
+const DISABLE_AUTOMATION_CONTROLLED_ARG = '--disable-blink-features=AutomationControlled';
+
+export function getLaunchArgs(args: string[] = []): string[] {
+  return args.includes(DISABLE_AUTOMATION_CONTROLLED_ARG) ? args : [...args, DISABLE_AUTOMATION_CONTROLLED_ARG];
+}
+
 enum LoginBaseResults {
   Success = 'SUCCESS',
   UnknownError = 'UNKNOWN_ERROR',
@@ -169,7 +177,10 @@ class BaseScraperWithBrowser<TCredentials extends ScraperCredentials> extends Ba
       env: this.options.verbose ? { DEBUG: '*', ...process.env } : undefined,
       headless,
       executablePath,
-      args,
+      args: getLaunchArgs(args),
+      // puppeteer adds --enable-automation by default, which puts Chrome into an "automated" mode that
+      // bot-detection picks up on. Dropping it has no downside for scraping.
+      ignoreDefaultArgs: ['--enable-automation'],
       timeout,
     });
 
