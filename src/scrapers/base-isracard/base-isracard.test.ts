@@ -49,16 +49,17 @@ describe('addTransactionDetails', () => {
     expect(txns.map(txn => txn.category)).toEqual(['חניוני רכב', 'חניוני רכב', 'חניוני רכב', 'חניוני רכב']);
   });
 
-  test('uses the given category cache, and adds a merchant once two of its charges agree', async () => {
-    jest.mocked(fetchPostWithinPage).mockResolvedValue(details('מסעדות'));
+  test('uses the given category cache once a call confirms the merchant, and adds a merchant once two of its charges agree', async () => {
+    jest.mocked(fetchPostWithinPage).mockResolvedValueOnce(details('חניוני רכב')).mockResolvedValue(details('מסעדות'));
     const cache = new Map([['פנגו', 'חניוני רכב']]);
 
-    const txns = await run([settled('1', 'פנגו'), settled('2', 'שגב'), settled('3', 'קפה'), settled('4', 'קפה')], {
-      additionalTransactionInformationCategoryCache: cache,
-    });
+    const txns = await run(
+      [settled('1', 'פנגו'), settled('2', 'שגב'), settled('3', 'קפה'), settled('4', 'קפה'), settled('5', 'פנגו')],
+      { additionalTransactionInformationCategoryCache: cache },
+    );
 
-    expect(requestedVouchers()).toEqual(['2', '3', '4']);
-    expect(txns.map(txn => txn.category)).toEqual(['חניוני רכב', 'מסעדות', 'מסעדות', 'מסעדות']);
+    expect(requestedVouchers()).toEqual(['1', '2', '3', '4']);
+    expect(txns.map(txn => txn.category)).toEqual(['חניוני רכב', 'מסעדות', 'מסעדות', 'מסעדות', 'חניוני רכב']);
     expect(cache.has('שגב')).toBe(false);
     expect(cache.get('קפה')).toBe('מסעדות');
   });
@@ -93,6 +94,22 @@ describe('addTransactionDetails', () => {
 
     expect(requestedVouchers()).toEqual(['1', '2', '3']);
     expect(txns.map(txn => txn.memo)).toEqual(['', 'העברה ל: רבקה דוד', 'העברה ל: יוסי כהן']);
+    expect(cache.has('NEWPAY')).toBe(false);
+  });
+
+  test('a transfer app cached by an earlier scrape is dropped once its check shows a transfer', async () => {
+    jest
+      .mocked(fetchPostWithinPage)
+      .mockResolvedValueOnce(details('מחשבים ותוכנות', { transferBeneficiary: 'רבקה דוד' }))
+      .mockResolvedValueOnce(details('מחשבים ותוכנות', { transferBeneficiary: 'יוסי כהן' }));
+    const cache = new Map([['NEWPAY', 'מחשבים ותוכנות']]);
+
+    const txns = await run([settled('1', 'NEWPAY'), settled('2', 'NEWPAY')], {
+      additionalTransactionInformationCategoryCache: cache,
+    });
+
+    expect(requestedVouchers()).toEqual(['1', '2']);
+    expect(txns.map(txn => txn.memo)).toEqual(['העברה ל: רבקה דוד', 'העברה ל: יוסי כהן']);
     expect(cache.has('NEWPAY')).toBe(false);
   });
 

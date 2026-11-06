@@ -201,7 +201,8 @@ async function fetchTransactionDetails(
 const AGREEING_CHARGES_TO_CACHE = 2;
 
 // Settled vouchers carry no merchant category, so each one needs its own GetTransactionDetails
-// call, unless the merchant's category is already in the category cache. Best effort: a call
+// call, unless the merchant's category is already in the category cache and one of its charges in
+// this scrape was confirmed not to be a transfer. Best effort: a call
 // that fails is tried once more at the end, and a transaction whose details still can't be read
 // is kept as-is, with the deal kind the list gave it.
 export async function addTransactionDetails(
@@ -223,6 +224,10 @@ export async function addTransactionDetails(
   const cacheable = (txn: Transaction) =>
     !isTransferService(txn.description) && !transferMerchants.has(txn.description);
   const agreeing = new Map<string, { category: string; count: number }>();
+  // A merchant cached by an earlier scrape gets one details call per scrape before the cache serves
+  // its other charges, so a transfer app cached by mistake is caught the first time that call shows
+  // a transfer, and dropped from the cache.
+  const checked = new Set<string>();
 
   const detailed = new Map<Transaction, Transaction>();
   const failed: Transaction[] = [];
@@ -246,6 +251,7 @@ export async function addTransactionDetails(
         agreeing.delete(txn.description);
         cache.delete(txn.description);
       } else if (result.category && cacheable(txn)) {
+        checked.add(txn.description);
         const seen = agreeing.get(txn.description);
         const count = seen?.category === result.category ? seen.count + 1 : 1;
         agreeing.set(txn.description, { category: result.category, count });
@@ -270,7 +276,7 @@ export async function addTransactionDetails(
     const batch: Transaction[] = [];
     const rest: Transaction[] = [];
     queue.forEach(txn => {
-      const cachedCategory = cacheable(txn) ? cache.get(txn.description) : undefined;
+      const cachedCategory = cacheable(txn) && checked.has(txn.description) ? cache.get(txn.description) : undefined;
       if (cachedCategory) {
         detailed.set(txn, { ...txn, category: cachedCategory });
       } else if (batch.length < RATE_LIMIT.DETAILS_BATCH_SIZE && !batch.some(b => b.description === txn.description)) {
