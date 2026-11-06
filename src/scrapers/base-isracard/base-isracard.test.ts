@@ -75,7 +75,8 @@ describe('addTransactionDetails', () => {
     });
 
     expect(requestedVouchers()).toEqual(['1', '2']);
-    expect(txns.map(txn => txn.memo)).toEqual(['רבקה דוד', 'יוסי כהן']);
+    expect(txns.map(txn => txn.memo)).toEqual(['העברה ל: רבקה דוד', 'העברה ל: יוסי כהן']);
+    expect(txns.map(txn => txn.category)).toEqual([undefined, undefined]);
     expect(cache.has(BIT)).toBe(false);
   });
 
@@ -87,7 +88,7 @@ describe('addTransactionDetails', () => {
     const txns = await run([pending, settled('1', BIT)]);
 
     expect(requestedVouchers()).toEqual(['1']);
-    expect(txns[1].memo).toBe('רבקה דוד');
+    expect(txns[1].memo).toBe('העברה ל: רבקה דוד');
   });
 
   test('skips the transactions the caller says not to fetch', async () => {
@@ -99,6 +100,17 @@ describe('addTransactionDetails', () => {
 
     expect(requestedVouchers()).toEqual(['2']);
     expect(txns[0].category).toBeUndefined();
+  });
+
+  test("asks once, as the voucher's own kind of deal, when the voucher says", async () => {
+    jest.mocked(fetchPostWithinPage).mockResolvedValue({ isSuccess: false, data: null });
+    const abroadInShekels = { ...settled('1', 'Booking'), additionalInformation: { isIsraelDeal: false } };
+
+    await run([abroadInShekels]);
+
+    expect(
+      jest.mocked(fetchPostWithinPage).mock.calls.map(([, , body]) => (body as { isIsraelDeal: boolean }).isIsraelDeal),
+    ).toEqual([false]);
   });
 
   test('asks again as the other kind of deal, and keeps the transaction when both fail', async () => {

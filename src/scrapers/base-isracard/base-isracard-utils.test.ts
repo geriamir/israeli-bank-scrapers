@@ -10,9 +10,10 @@ import {
   getDetailsCategory,
   getDetailsMemo,
   getVoucherInstallments,
-  guessIsIsraelDeal,
+  getIsIsraelDeal,
   isApprovedTransactionSettled,
   isTransferDetails,
+  type IsracardTransaction,
   type ScrapedApprovedTransaction,
   type ScrapedCard,
   type ScrapedLoginValidation,
@@ -299,10 +300,69 @@ describe('convertVoucher', () => {
   });
 });
 
-describe('guessIsIsraelDeal', () => {
-  test('treats a shekel deal as Israeli and any other currency as abroad', () => {
-    expect(guessIsIsraelDeal({ originalCurrency: 'ILS' } as Transaction)).toBe(true);
-    expect(guessIsIsraelDeal({ originalCurrency: 'USD' } as Transaction)).toBe(false);
+describe('getIsIsraelDeal', () => {
+  test('takes it from the voucher when the voucher says', () => {
+    const abroadInShekels = {
+      originalCurrency: 'ILS',
+      additionalInformation: { isIsraelDeal: false },
+    } as IsracardTransaction;
+
+    expect(getIsIsraelDeal(abroadInShekels)).toEqual({ isIsraelDeal: false, known: true });
+  });
+
+  test('otherwise treats a shekel deal as Israeli and any other currency as abroad', () => {
+    expect(getIsIsraelDeal({ originalCurrency: 'ILS' } as Transaction)).toEqual({ isIsraelDeal: true, known: false });
+    expect(getIsIsraelDeal({ originalCurrency: 'USD' } as Transaction)).toEqual({ isIsraelDeal: false, known: false });
+  });
+});
+
+describe('convertVoucher extra fields', () => {
+  const voucher = {
+    purchaseDate: '06/10/2026',
+    purchaseTime: '16:19:00',
+    businessName: 'ארומה',
+    originalAmount: 12,
+    originalCurrencyIso: 'ILS',
+    billingAmount: 12,
+    moreInfo: '  ',
+    seqVoucherNumber: '259146881',
+    currentInstallmentNum: null,
+    numberOfInstallment: null,
+    transactionDescription: 'עסקאות רגילות',
+    isIsraelDeal: true,
+    businessNumber: 7463177,
+    isdirectDebit: false,
+    tranzacCodeDescription: 'עסקת אנטרנט',
+    presentCard: false,
+    cityDescription: 'מודיעין-מכבי',
+    countryDescription: 'ישראל',
+  } as ScrapedVoucher;
+
+  test('keeps the list fields in additionalInformation', () => {
+    expect(convertVoucher(voucher, '2026-10-09T21:00:00.000Z').additionalInformation).toEqual({
+      isIsraelDeal: true,
+      businessNumber: 7463177,
+      directDebit: false,
+      transactionChannel: 'עסקת אנטרנט',
+      cardPresent: false,
+      city: 'מודיעין-מכבי',
+      country: 'ישראל',
+    });
+  });
+
+  test('leaves additionalInformation out when the list has none of them', () => {
+    const {
+      isIsraelDeal: _a,
+      businessNumber: _b,
+      isdirectDebit: _c,
+      tranzacCodeDescription: _d,
+      presentCard: _e,
+      cityDescription: _f,
+      countryDescription: _g,
+      ...bare
+    } = voucher;
+
+    expect(convertVoucher(bare as ScrapedVoucher, '2026-10-09T21:00:00.000Z').additionalInformation).toBeUndefined();
   });
 });
 
@@ -340,8 +400,8 @@ describe('transaction details', () => {
   test('adds the transfer beneficiary and reason to the memo, without repeating it', () => {
     const transfer = { ...details, transferBeneficiary: 'ישראל ישראלי', transferReason: 'שכר דירה' };
 
-    expect(getDetailsMemo('', transfer)).toBe('ישראל ישראלי שכר דירה');
-    expect(getDetailsMemo('שכר דירה', transfer)).toBe('שכר דירה ישראל ישראלי');
+    expect(getDetailsMemo('', transfer)).toBe('העברה ל: ישראל ישראלי, שכר דירה');
+    expect(getDetailsMemo('שכר דירה', transfer)).toBe('העברה ל: ישראל ישראלי, שכר דירה');
     expect(getDetailsMemo('memo', details)).toBe('memo');
   });
 
@@ -360,8 +420,46 @@ describe('transaction details', () => {
       parentBranchDescription: null,
     };
 
-    expect(applyTransactionDetails(txn, details)).toEqual({ ...txn, category: 'חניוני רכב', memo: '' });
+    expect(applyTransactionDetails(txn, details)).toMatchObject({ ...txn, category: 'חניוני רכב', memo: '' });
     expect(applyTransactionDetails({ ...txn, category: 'x' }, noCategory).category).toBe('x');
+  });
+
+  test("gives a transfer no category from the transfer service's own branch", () => {
+    const payBox = { ...details, branchDescription: 'מחשבים ותוכנות', transferBeneficiary: 'אינה שרון' };
+
+    const result = applyTransactionDetails({ ...txn, description: 'PAYBOX' }, payBox);
+
+    expect(result.category).toBeUndefined();
+    expect(result.memo).toBe('העברה ל: אינה שרון');
+    expect(result.additionalInformation?.transferBeneficiary).toBe('אינה שרון');
+  });
+
+  test('keeps the extra details fields, the list winning where both have one', () => {
+    const fromList = { ...txn, additionalInformation: { country: 'ישראל', directDebit: false } };
+
+    const result = applyTransactionDetails(fromList, {
+      ...details,
+      moneyTransferType: 3,
+      businessNumber: 9871997,
+      directDebit: true,
+      tranzakDescription: 'טלפוני',
+      cardPresent: false,
+      israelAdressCity: 'תל אביב - יפ',
+      country: null,
+    });
+
+    expect(result.additionalInformation).toEqual({
+      parentBranchDescription: 'רכב ותחבורה',
+      branchDescription: 'חניוני רכב',
+      secondBranchDescription: 'רכב - שירותים ואביזרים',
+      moneyTransferType: '3',
+      businessNumber: 9871997,
+      directDebit: false,
+      transactionChannel: 'טלפוני',
+      cardPresent: false,
+      city: 'תל אביב - יפ',
+      country: 'ישראל',
+    });
   });
 
   test('appends the details to the raw transaction only when requested', () => {

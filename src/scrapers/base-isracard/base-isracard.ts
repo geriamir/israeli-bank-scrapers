@@ -21,7 +21,7 @@ import {
   getCardBalance,
   getCardBalanceDate,
   getCardFrame,
-  guessIsIsraelDeal,
+  getIsIsraelDeal,
   isApprovedTransactionSettled,
   isTransferDetails,
   type ScrapedCard,
@@ -242,24 +242,11 @@ export async function addTransactionDetails(
     await Promise.all(
       batch.map(async txn => {
         try {
-          const isIsraelDeal = guessIsIsraelDeal(txn);
-          const details =
-            (await fetchTransactionDetails(
-              page,
-              transactionDetailsUrl,
-              transactionsCompanyCode,
-              card,
-              txn,
-              isIsraelDeal,
-            )) ??
-            (await fetchTransactionDetails(
-              page,
-              transactionDetailsUrl,
-              transactionsCompanyCode,
-              card,
-              txn,
-              !isIsraelDeal,
-            ));
+          const { isIsraelDeal, known } = getIsIsraelDeal(txn);
+          const ask = (asIsraelDeal: boolean) =>
+            fetchTransactionDetails(page, transactionDetailsUrl, transactionsCompanyCode, card, txn, asIsraelDeal);
+          // Only a guess is worth asking the other way round
+          const details = (await ask(isIsraelDeal)) ?? (known ? null : await ask(!isIsraelDeal));
           if (!details) {
             debug(`no details for transaction ${txn.identifier} on card ${card.cardSuffix}`);
             return;
