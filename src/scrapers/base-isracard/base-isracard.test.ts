@@ -91,6 +91,39 @@ describe('addTransactionDetails', () => {
     expect(txns[1].memo).toBe('העברה ל: רבקה דוד');
   });
 
+  test('never serves a transfer service from the cache, nor caches one without a beneficiary', async () => {
+    jest
+      .mocked(fetchPostWithinPage)
+      .mockResolvedValueOnce(details('מחשבים ותוכנות'))
+      .mockResolvedValueOnce(details('מחשבים ותוכנות', { transferBeneficiary: 'אינה שרון' }));
+    const cache = new Map([['PAYBOX', 'מחשבים ותוכנות']]);
+
+    const txns = await run([settled('1', 'PAYBOX'), settled('2', 'PAYBOX')], {
+      additionalTransactionInformationCategoryCache: cache,
+    });
+
+    expect(requestedVouchers()).toEqual(['1', '2']);
+    expect(txns[1].memo).toBe('העברה ל: אינה שרון');
+    expect(cache.has('PAYBOX')).toBe(false);
+  });
+
+  test('stops caching a merchant once it is seen making a transfer', async () => {
+    jest
+      .mocked(fetchPostWithinPage)
+      .mockResolvedValueOnce(details('העברות', { transferBeneficiary: 'רבקה דוד' }))
+      .mockResolvedValueOnce(details('העברות'))
+      .mockResolvedValueOnce(details('העברות', { transferBeneficiary: 'יוסי כהן' }));
+    const cache = new Map<string, string>();
+
+    const txns = await run([settled('1', 'NEWPAY'), settled('2', 'NEWPAY'), settled('3', 'NEWPAY')], {
+      additionalTransactionInformationCategoryCache: cache,
+    });
+
+    expect(requestedVouchers()).toEqual(['1', '2', '3']);
+    expect(txns[2].memo).toBe('העברה ל: יוסי כהן');
+    expect(cache.has('NEWPAY')).toBe(false);
+  });
+
   test('skips the transactions the caller says not to fetch', async () => {
     jest.mocked(fetchPostWithinPage).mockResolvedValue(details('מסעדות'));
 

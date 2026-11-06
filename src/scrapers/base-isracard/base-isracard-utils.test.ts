@@ -13,6 +13,7 @@ import {
   getIsIsraelDeal,
   isApprovedTransactionSettled,
   isTransferDetails,
+  isTransferService,
   type IsracardTransaction,
   type ScrapedApprovedTransaction,
   type ScrapedCard,
@@ -469,5 +470,33 @@ describe('transaction details', () => {
 
     expect(Array.isArray(withRaw.rawTransaction)).toBe(true);
     expect(applyTransactionDetails(txn, details).rawTransaction).toBeUndefined();
+  });
+});
+
+describe('isTransferService', () => {
+  test.each([
+    'PAYBOX',
+    'Pay Box',
+    'העברה ב BIT בנה"פ',
+    'BIT',
+    'הפועלים-ביט',
+    'PEPPER PAY',
+    'מפייבוקס שלי-י',
+    'העברת כספים',
+  ])('is true for %s', name => {
+    expect(isTransferService(name)).toBe(true);
+  });
+
+  test.each([
+    'הראל ביטוח חיים',
+    'מ.התחבורה-פנגו מוביט',
+    'TWOSOME טאביט',
+    'BITCOIN',
+    'PAYPAL *ALBEROVIVOS',
+    'ALIPAY',
+    'ארומה',
+    '',
+  ])('is false for %s', name => {
+    expect(isTransferService(name)).toBe(false);
   });
 });

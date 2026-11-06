@@ -24,6 +24,7 @@ import {
   getIsIsraelDeal,
   isApprovedTransactionSettled,
   isTransferDetails,
+  isTransferService,
   type ScrapedCard,
   type ScrapedCardListResponse,
   type ScrapedLoginValidation,
@@ -208,6 +209,12 @@ export async function addTransactionDetails(
   // Filled only from details, which say whether a transaction is a transfer: a pending
   // transaction's category doesn't, and a cached transfer would lose its beneficiary.
   const cache = options.additionalTransactionInformationCategoryCache ?? new Map<string, string>();
+  // A transfer service's charges are mostly transfers, each naming its own beneficiary, and one
+  // without a beneficiary looks like a plain purchase - so a transfer service is never cached,
+  // known ones by name, any other once it is seen making a transfer.
+  const transferMerchants = new Set<string>();
+  const cacheable = (txn: Transaction) =>
+    !isTransferService(txn.description) && !transferMerchants.has(txn.description);
 
   let queue = txns.filter(
     txn => txn.status === TransactionStatuses.Completed && !!txn.identifier && shouldFetch(txn, card.cardSuffix),
@@ -221,7 +228,7 @@ export async function addTransactionDetails(
     const batch: Transaction[] = [];
     const rest: Transaction[] = [];
     queue.forEach(txn => {
-      const cachedCategory = cache.get(txn.description);
+      const cachedCategory = cacheable(txn) ? cache.get(txn.description) : undefined;
       if (cachedCategory) {
         detailed.set(txn, { ...txn, category: cachedCategory });
       } else if (batch.length < RATE_LIMIT.DETAILS_BATCH_SIZE && !batch.some(b => b.description === txn.description)) {
@@ -253,8 +260,10 @@ export async function addTransactionDetails(
           }
           const result = applyTransactionDetails(txn, details, options);
           detailed.set(txn, result);
-          // A transfer's memo names its own beneficiary, so its details are never reused
-          if (result.category && !isTransferDetails(details)) {
+          if (isTransferDetails(details)) {
+            transferMerchants.add(txn.description);
+            cache.delete(txn.description);
+          } else if (result.category && cacheable(txn)) {
             cache.set(txn.description, result.category);
           }
         } catch (e) {

@@ -329,6 +329,15 @@ export function getDetailsMemo(memo: string | undefined, details: ScrapedTransac
   return [...new Set(parts)].join(', ');
 }
 
+// Money-transfer apps as they appear as a merchant: "PAYBOX", "העברה ב BIT בנה"פ", "הפועלים-ביט",
+// "PEPPER PAY", "העברת כספים". Word-bounded (by hand for Hebrew, which \b doesn't handle) so that
+// e.g. "ביטוח" (insurance), "טאביט" or "BITCOIN" stays a merchant like any other.
+const TRANSFER_SERVICE_PATTERN = /PAY\s?BOX|\bBIT\b|\bPEPPER\b|פייבוקס|(^|[\s\-])ביט($|[\s\-])|^העבר(ה|ת)(\s|$)/i;
+
+export function isTransferService(description: string | undefined): boolean {
+  return TRANSFER_SERVICE_PATTERN.test((description || '').trim());
+}
+
 export function isTransferDetails(details: ScrapedTransactionDetails): boolean {
   return !!(details.transferBeneficiary?.trim() || details.transferReason?.trim());
 }
