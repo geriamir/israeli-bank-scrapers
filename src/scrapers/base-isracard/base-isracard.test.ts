@@ -31,7 +31,9 @@ const run = (txns: Transaction[], options: Partial<ScraperOptions> = {}) =>
   addTransactionDetails(page, DETAILS_URL, 11, card, txns, options as ScraperOptions);
 
 const requestedVouchers = () =>
-  jest.mocked(fetchPostWithinPage).mock.calls.map(([, , body]) => (body as { seqVoucherNumber: string }).seqVoucherNumber);
+  jest
+    .mocked(fetchPostWithinPage)
+    .mock.calls.map(([, , body]) => (body as { seqVoucherNumber: string }).seqVoucherNumber);
 
 describe('addTransactionDetails', () => {
   beforeEach(() => {

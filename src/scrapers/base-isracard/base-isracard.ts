@@ -17,6 +17,7 @@ import {
   convertApprovedTransaction,
   convertVoucher,
   DATE_FORMAT,
+  describeLoginValidationFailure,
   getCardBalance,
   getCardBalanceDate,
   getCardFrame,
@@ -243,8 +244,22 @@ export async function addTransactionDetails(
         try {
           const isIsraelDeal = guessIsIsraelDeal(txn);
           const details =
-            (await fetchTransactionDetails(page, transactionDetailsUrl, transactionsCompanyCode, card, txn, isIsraelDeal)) ??
-            (await fetchTransactionDetails(page, transactionDetailsUrl, transactionsCompanyCode, card, txn, !isIsraelDeal));
+            (await fetchTransactionDetails(
+              page,
+              transactionDetailsUrl,
+              transactionsCompanyCode,
+              card,
+              txn,
+              isIsraelDeal,
+            )) ??
+            (await fetchTransactionDetails(
+              page,
+              transactionDetailsUrl,
+              transactionsCompanyCode,
+              card,
+              txn,
+              !isIsraelDeal,
+            ));
           if (!details) {
             debug(`no details for transaction ${txn.identifier} on card ${card.cardSuffix}`);
             return;
@@ -346,7 +361,7 @@ class IsracardGroupScraper extends BaseScraperWithBrowser<ScraperSpecificCredent
       validateResult.Header.Status !== '1' ||
       !validateResult.ValidateIdDataBean
     ) {
-      throw new Error('unknown error during login');
+      throw new Error(`unknown error during login (${describeLoginValidationFailure(validateResult)})`);
     }
 
     const validateReturnCode = validateResult.ValidateIdDataBean.returnCode;

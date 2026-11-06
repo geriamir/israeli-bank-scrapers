@@ -22,6 +22,26 @@ export interface ScrapedLoginValidation {
   };
 }
 
+const MAX_LOGGED_STATUS_LENGTH = 20;
+
+/**
+ * Says what was wrong with a login validation response, for the error message.
+ * The response can carry the user's details, so of its values only the status
+ * code is included; of the rest, only the field names.
+ */
+export function describeLoginValidationFailure(result: ScrapedLoginValidation | null): string {
+  if (!result) {
+    return 'empty response';
+  }
+  const status = JSON.stringify(result.Header?.Status);
+  return [
+    `Header.Status=${status === undefined ? 'missing' : status.slice(0, MAX_LOGGED_STATUS_LENGTH)}`,
+    `ValidateIdDataBean ${result.ValidateIdDataBean ? 'present' : 'missing'}`,
+    `fields: ${Object.keys(result).join(',')}`,
+    `Header fields: ${Object.keys(result.Header ?? {}).join(',')}`,
+  ].join('; ');
+}
+
 export interface ScrapedCard {
   companyCode: string;
   cardStatus: string;

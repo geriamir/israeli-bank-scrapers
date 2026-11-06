@@ -1,5 +1,5 @@
 import { extendAsyncTimeout, getTestsConfig } from '../tests/tests-utils';
-import { BaseScraperWithBrowser } from './base-scraper-with-browser';
+import { BaseScraperWithBrowser, getLaunchArgs } from './base-scraper-with-browser';
 
 const testsConfig = getTestsConfig();
 
@@ -49,5 +49,42 @@ describe('Base scraper with browser', () => {
       await baseScraperWithBrowser.terminate(false);
       throw e;
     }
+  });
+
+  test('should launch the browser without automation markers', async () => {
+    const options = {
+      ...testsConfig.options,
+      companyId: 'test',
+      showBrowser: false,
+    };
+
+    const baseScraperWithBrowser = new BaseScraperWithBrowser(options);
+    try {
+      await baseScraperWithBrowser.initialize();
+      // @ts-ignore
+      const { page } = baseScraperWithBrowser;
+      const spawnArgs: string[] = page.browser().process()?.spawnargs ?? [];
+      expect(spawnArgs).not.toContain('--enable-automation');
+      expect(spawnArgs).toContain('--disable-blink-features=AutomationControlled');
+      await baseScraperWithBrowser.terminate(true);
+    } catch (e) {
+      await baseScraperWithBrowser.terminate(false);
+      throw e;
+    }
+  });
+});
+
+describe('getLaunchArgs', () => {
+  test('appends the AutomationControlled flag to the caller args', () => {
+    expect(getLaunchArgs(['--no-sandbox'])).toEqual(['--no-sandbox', '--disable-blink-features=AutomationControlled']);
+  });
+
+  test('does not duplicate the flag when the caller already passes it', () => {
+    const args = ['--disable-blink-features=AutomationControlled'];
+    expect(getLaunchArgs(args)).toEqual(args);
+  });
+
+  test('works without caller args', () => {
+    expect(getLaunchArgs()).toEqual(['--disable-blink-features=AutomationControlled']);
   });
 });
