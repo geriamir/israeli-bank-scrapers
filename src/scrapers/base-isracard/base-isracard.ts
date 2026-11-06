@@ -43,6 +43,7 @@ const RATE_LIMIT = {
   SLEEP_BETWEEN: 2500,
   DETAILS_BATCH_SIZE: 5,
   DETAILS_SLEEP_BETWEEN: 1000,
+  DETAILS_RETRY_SLEEP: 3000,
 } as const;
 
 const JSON_HEADERS = { 'Content-Type': 'application/json', Accept: 'application/json' };
@@ -194,9 +195,15 @@ async function fetchTransactionDetails(
   return response?.isSuccess && response.data ? response.data : null;
 }
 
+// A merchant is cached once this many of its charges in a scrape gave details that agree and
+// aren't transfers: one plain payment through a transfer app the name list misses must not decide
+// the category of all its later transfers.
+const AGREEING_CHARGES_TO_CACHE = 2;
+
 // Settled vouchers carry no merchant category, so each one needs its own GetTransactionDetails
-// call, unless the merchant's category is already in the category cache. Best effort: a
-// transaction whose details can't be read is kept as-is.
+// call, unless the merchant's category is already in the category cache. Best effort: a call
+// that fails is tried once more at the end, and a transaction whose details still can't be read
+// is kept as-is, with the deal kind the list gave it.
 export async function addTransactionDetails(
   page: Page,
   transactionDetailsUrl: string,
@@ -215,13 +222,48 @@ export async function addTransactionDetails(
   const transferMerchants = new Set<string>();
   const cacheable = (txn: Transaction) =>
     !isTransferService(txn.description) && !transferMerchants.has(txn.description);
+  const agreeing = new Map<string, { category: string; count: number }>();
+
+  const detailed = new Map<Transaction, Transaction>();
+  const failed: Transaction[] = [];
+
+  const addDetails = async (txn: Transaction) => {
+    try {
+      const { isIsraelDeal, known } = getIsIsraelDeal(txn);
+      const ask = (asIsraelDeal: boolean) =>
+        fetchTransactionDetails(page, transactionDetailsUrl, transactionsCompanyCode, card, txn, asIsraelDeal);
+      // Only a guess is worth asking the other way round
+      const details = (await ask(isIsraelDeal)) ?? (known ? null : await ask(!isIsraelDeal));
+      if (!details) {
+        debug(`no details for transaction ${txn.identifier} on card ${card.cardSuffix}`);
+        failed.push(txn);
+        return;
+      }
+      const result = applyTransactionDetails(txn, details, options);
+      detailed.set(txn, result);
+      if (isTransferDetails(details)) {
+        transferMerchants.add(txn.description);
+        agreeing.delete(txn.description);
+        cache.delete(txn.description);
+      } else if (result.category && cacheable(txn)) {
+        const seen = agreeing.get(txn.description);
+        const count = seen?.category === result.category ? seen.count + 1 : 1;
+        agreeing.set(txn.description, { category: result.category, count });
+        if (count >= AGREEING_CHARGES_TO_CACHE) {
+          cache.set(txn.description, result.category);
+        }
+      }
+    } catch (e) {
+      debug(`failed to fetch details for transaction ${txn.identifier} on card ${card.cardSuffix}`, e);
+      failed.push(txn);
+    }
+  };
 
   let queue = txns.filter(
     txn => txn.status === TransactionStatuses.Completed && !!txn.identifier && shouldFetch(txn, card.cardSuffix),
   );
   debug(`getting details for ${queue.length} of ${txns.length} transactions on card ${card.cardSuffix}`);
 
-  const detailed = new Map<Transaction, Transaction>();
   let calls = 0;
   while (queue.length) {
     // One transaction per merchant in a batch, so the next of its transactions can use the cache
@@ -246,33 +288,24 @@ export async function addTransactionDetails(
       await randomDelay(RATE_LIMIT.DETAILS_SLEEP_BETWEEN, RATE_LIMIT.DETAILS_SLEEP_BETWEEN + 500);
     }
     calls += batch.length;
-    await Promise.all(
-      batch.map(async txn => {
-        try {
-          const { isIsraelDeal, known } = getIsIsraelDeal(txn);
-          const ask = (asIsraelDeal: boolean) =>
-            fetchTransactionDetails(page, transactionDetailsUrl, transactionsCompanyCode, card, txn, asIsraelDeal);
-          // Only a guess is worth asking the other way round
-          const details = (await ask(isIsraelDeal)) ?? (known ? null : await ask(!isIsraelDeal));
-          if (!details) {
-            debug(`no details for transaction ${txn.identifier} on card ${card.cardSuffix}`);
-            return;
-          }
-          const result = applyTransactionDetails(txn, details, options);
-          detailed.set(txn, result);
-          if (isTransferDetails(details)) {
-            transferMerchants.add(txn.description);
-            cache.delete(txn.description);
-          } else if (result.category && cacheable(txn)) {
-            cache.set(txn.description, result.category);
-          }
-        } catch (e) {
-          debug(`failed to fetch details for transaction ${txn.identifier} on card ${card.cardSuffix}`, e);
-        }
-      }),
-    );
+    await Promise.all(batch.map(addDetails));
   }
-  debug(`made ${calls} details calls for card ${card.cardSuffix}`);
+
+  // One more try for the calls that failed - e.g. a batch the site rate limited - after a longer pause
+  const retries = failed.splice(0);
+  if (retries.length) {
+    debug(`retrying details for ${retries.length} transactions on card ${card.cardSuffix}`);
+    await randomDelay(RATE_LIMIT.DETAILS_RETRY_SLEEP, RATE_LIMIT.DETAILS_RETRY_SLEEP + 1000);
+    for (let i = 0; i < retries.length; i += RATE_LIMIT.DETAILS_BATCH_SIZE) {
+      if (i > 0) {
+        await randomDelay(RATE_LIMIT.DETAILS_SLEEP_BETWEEN, RATE_LIMIT.DETAILS_SLEEP_BETWEEN + 500);
+      }
+      const batch = retries.slice(i, i + RATE_LIMIT.DETAILS_BATCH_SIZE);
+      calls += batch.length;
+      await Promise.all(batch.map(addDetails));
+    }
+  }
+  debug(`made ${calls} details calls for card ${card.cardSuffix}; ${failed.length} without details`);
 
   return txns.map(txn => detailed.get(txn) ?? txn);
 }
