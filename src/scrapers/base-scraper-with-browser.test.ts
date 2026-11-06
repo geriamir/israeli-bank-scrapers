@@ -56,6 +56,8 @@ describe('Base scraper with browser', () => {
       ...testsConfig.options,
       companyId: 'test',
       showBrowser: false,
+      // CI's Linux runners have no usable Chrome sandbox; the flags under test are added either way
+      args: ['--no-sandbox'],
     };
 
     const baseScraperWithBrowser = new BaseScraperWithBrowser(options);

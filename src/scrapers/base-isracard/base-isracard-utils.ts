@@ -101,6 +101,15 @@ export interface ScrapedVoucher {
   currentInstallmentNum: number | null;
   numberOfInstallment: number | null;
   transactionDescription: string | null;
+  /** Which kind of deal GetTransactionDetails must be asked about. */
+  isIsraelDeal?: boolean | null;
+  businessNumber?: number | null;
+  isdirectDebit?: boolean | null;
+  /** How the deal was made, e.g. "עסקת אנטרנט" (online). */
+  tranzacCodeDescription?: string | null;
+  presentCard?: boolean | null;
+  cityDescription?: string | null;
+  countryDescription?: string | null;
 }
 
 export interface ScrapedOutOfStatementGroup {
@@ -124,6 +133,61 @@ export interface ScrapedTransactionsResponse {
   errorDescription: string | null;
   isSuccess: boolean;
 }
+
+export interface ScrapedTransactionDetails {
+  parentBranchDescription: string | null;
+  branchDescription: string | null;
+  secondBranchDescription: string | null;
+  transferBeneficiary: string | null;
+  transferReason: string | null;
+  moneyTransferType?: string | number | null;
+  businessNumber?: number | null;
+  directDebit?: boolean | null;
+  /** How the deal was made, e.g. "טלפוני" (by phone). */
+  tranzakDescription?: string | null;
+  cardPresent?: boolean | null;
+  israelAdressCity?: string | null;
+  country?: string | null;
+}
+
+export interface ScrapedTransactionDetailsResponse {
+  data: ScrapedTransactionDetails | null;
+  errorCode: string;
+  errorDescription: string | null;
+  isSuccess: boolean;
+}
+
+/** What a charge carries beyond the standard Transaction fields, from the list and the details call. */
+export interface IsracardAdditionalInformation {
+  isIsraelDeal?: boolean;
+  parentBranchDescription?: string;
+  branchDescription?: string;
+  secondBranchDescription?: string;
+  transferBeneficiary?: string;
+  transferReason?: string;
+  moneyTransferType?: string;
+  businessNumber?: number;
+  directDebit?: boolean;
+  transactionChannel?: string;
+  cardPresent?: boolean;
+  city?: string;
+  country?: string;
+}
+
+export type IsracardTransaction = Transaction & {
+  additionalInformation?: IsracardAdditionalInformation;
+};
+
+const trimmedOrUndefined = (value: string | null | undefined): string | undefined => value?.trim() || undefined;
+
+const numberOrUndefined = (value: number | null | undefined): number | undefined =>
+  typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+
+const booleanOrUndefined = (value: boolean | null | undefined): boolean | undefined =>
+  typeof value === 'boolean' ? value : undefined;
+
+const definedOnly = <T extends object>(values: T): Partial<T> =>
+  Object.fromEntries(Object.entries(values).filter(([, value]) => value !== undefined)) as Partial<T>;
 
 export function getCardBalance(card: ScrapedCard): number | undefined {
   if (!card.limitData) {
@@ -200,11 +264,20 @@ export function convertVoucher(
   voucher: ScrapedVoucher,
   processedDateIso: string,
   options?: ScraperOptions,
-): Transaction {
+): IsracardTransaction {
   const dateMoment = moment(`${voucher.purchaseDate} ${voucher.purchaseTime || '00:00:00'}`, `${DATE_FORMAT} HH:mm:ss`);
   const installments = getVoucherInstallments(voucher);
+  const additionalInformation = definedOnly({
+    isIsraelDeal: booleanOrUndefined(voucher.isIsraelDeal),
+    businessNumber: numberOrUndefined(voucher.businessNumber),
+    directDebit: booleanOrUndefined(voucher.isdirectDebit),
+    transactionChannel: trimmedOrUndefined(voucher.tranzacCodeDescription),
+    cardPresent: booleanOrUndefined(voucher.presentCard),
+    city: trimmedOrUndefined(voucher.cityDescription),
+    country: trimmedOrUndefined(voucher.countryDescription),
+  });
 
-  const result: Transaction = {
+  const result: IsracardTransaction = {
     type: installments ? TransactionTypes.Installments : TransactionTypes.Normal,
     identifier: voucher.seqVoucherNumber,
     date: dateMoment.toISOString(),
@@ -215,13 +288,103 @@ export function convertVoucher(
     chargedCurrency: SHEKEL_CURRENCY,
     description: (voucher.businessName || '').trim(),
     memo: (voucher.moreInfo || '').trim(),
-    category: voucher.transactionDescription?.trim() || undefined,
+    // `transactionDescription` is the deal kind ("עסקאות רגילות"), not a merchant category -
+    // the category only comes from GetTransactionDetails (see applyTransactionDetails).
     installments,
     status: TransactionStatuses.Completed,
   };
 
+  if (Object.keys(additionalInformation).length) {
+    result.additionalInformation = additionalInformation;
+  }
+
   if (options?.includeRawTransaction) {
     result.rawTransaction = getRawTransaction(voucher);
+  }
+
+  return result;
+}
+
+// GetTransactionDetails needs to know whether the deal was Israeli. The voucher says so;
+// only when it doesn't is a shekel deal taken as the likely Israeli one.
+export function getIsIsraelDeal(txn: IsracardTransaction): { isIsraelDeal: boolean; known: boolean } {
+  const known = txn.additionalInformation?.isIsraelDeal;
+  return typeof known === 'boolean'
+    ? { isIsraelDeal: known, known: true }
+    : { isIsraelDeal: txn.originalCurrency === SHEKEL_CURRENCY, known: false };
+}
+
+export function getDetailsCategory(details: ScrapedTransactionDetails): string | undefined {
+  const category = [details.branchDescription, details.secondBranchDescription, details.parentBranchDescription]
+    .map(value => value?.trim())
+    .find(value => !!value);
+  return category || undefined;
+}
+
+export function getDetailsMemo(memo: string | undefined, details: ScrapedTransactionDetails): string {
+  const beneficiary = trimmedOrUndefined(details.transferBeneficiary);
+  const parts = [beneficiary && `העברה ל: ${beneficiary}`, details.transferReason, memo]
+    .map(value => (value || '').trim())
+    .filter(value => !!value);
+  return [...new Set(parts)].join(', ');
+}
+
+// Money-transfer apps as they appear as a merchant: "PAYBOX", "העברה ב BIT בנה"פ", "הפועלים-ביט",
+// "PEPPER PAY", "העברת כספים". Word-bounded (by hand for Hebrew, which \b doesn't handle) so that
+// e.g. "ביטוח" (insurance), "טאביט" or "BITCOIN" stays a merchant like any other.
+const TRANSFER_SERVICE_PATTERN = /PAY\s?BOX|\bBIT\b|\bPEPPER\b|פייבוקס|(^|[\s\-])ביט($|[\s\-])|^העבר(ה|ת)(\s|$)/i;
+
+export function isTransferService(description: string | undefined): boolean {
+  return TRANSFER_SERVICE_PATTERN.test((description || '').trim());
+}
+
+export function isTransferDetails(details: ScrapedTransactionDetails): boolean {
+  return !!(details.transferBeneficiary?.trim() || details.transferReason?.trim());
+}
+
+/**
+ * Folds a voucher's GetTransactionDetails into it. A transfer (PayBox, Bit) carries the
+ * business type of the transfer service itself - PayBox is "computers and software" - so
+ * it takes no category from the details; who it went to goes into the memo instead.
+ * The extra fields go into additionalInformation, where the list's values, already
+ * there, win over the details'.
+ */
+export function applyTransactionDetails(
+  txn: IsracardTransaction,
+  details: ScrapedTransactionDetails,
+  options?: ScraperOptions,
+): IsracardTransaction {
+  const isTransfer = isTransferDetails(details);
+  const moneyTransferType =
+    details.moneyTransferType === null || details.moneyTransferType === undefined
+      ? undefined
+      : trimmedOrUndefined(String(details.moneyTransferType));
+
+  const result: IsracardTransaction = {
+    ...txn,
+    category: isTransfer ? txn.category : (getDetailsCategory(details) ?? txn.category),
+    memo: getDetailsMemo(txn.memo, details),
+    additionalInformation: {
+      ...definedOnly({
+        parentBranchDescription: trimmedOrUndefined(details.parentBranchDescription),
+        branchDescription: trimmedOrUndefined(details.branchDescription),
+        secondBranchDescription: trimmedOrUndefined(details.secondBranchDescription),
+        transferBeneficiary: trimmedOrUndefined(details.transferBeneficiary),
+        transferReason: trimmedOrUndefined(details.transferReason),
+        moneyTransferType,
+        businessNumber: numberOrUndefined(details.businessNumber),
+        directDebit: booleanOrUndefined(details.directDebit),
+        transactionChannel: trimmedOrUndefined(details.tranzakDescription),
+        cardPresent: booleanOrUndefined(details.cardPresent),
+        city: trimmedOrUndefined(details.israelAdressCity),
+        country: trimmedOrUndefined(details.country),
+      }),
+      ...txn.additionalInformation,
+    },
+  };
+
+  if (options?.includeRawTransaction) {
+    result.rawTransaction = getRawTransaction(details, txn);
   }
 
   return result;
