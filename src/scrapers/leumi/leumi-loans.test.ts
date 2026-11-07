@@ -111,3 +111,37 @@ test('exact visible summary link remains supported and ambiguous menus never cli
     expect(clicked).toEqual([]);
   }
 });
+
+test('table readiness rejects the visible shell and partial rows, accepts any populated loan count', async () => {
+  const { page } = navigationPage([{ text: 'הלוואות' }]);
+  await readLeumiLoans(page as unknown as Page);
+  const ready = page.waitForFunction.mock.calls[1][0] as () => boolean;
+  const original = Object.getOwnPropertyDescriptor(globalThis, 'document');
+  const check = (data: string[][]) => {
+    Object.defineProperty(globalThis, 'document', {
+      configurable: true,
+      value: {
+        querySelector: () => ({ rows: data.map(cells => ({ cells: cells.map(textContent => ({ textContent })) })) }),
+      },
+    });
+    return ready();
+  };
+  try {
+    expect(check([])).toBe(false);
+    expect(check([header])).toBe(false);
+    expect(check([header, row, ['סה"כ בש"ח:', '']])).toBe(false);
+    expect(check([header, [...row.slice(0, 5), ''], rows[3]])).toBe(false);
+    expect(check([header, row, rows[3]])).toBe(true);
+    expect(check(rows)).toBe(true);
+  } finally {
+    if (original) Object.defineProperty(globalThis, 'document', original);
+    else Reflect.deleteProperty(globalThis, 'document');
+  }
+});
+
+test('readiness timeout remains unavailable and never reads partial balances', async () => {
+  const { page } = navigationPage([{ text: 'הלוואות' }]);
+  page.waitForFunction.mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error('synthetic timeout'));
+  expect((await readLeumiLoans(page as unknown as Page)).status).toBe('unavailable');
+  expect(page.$eval).not.toHaveBeenCalled();
+});

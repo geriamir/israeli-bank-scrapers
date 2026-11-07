@@ -94,6 +94,36 @@ export async function readLeumiLoans(page: Page): Promise<BankLoanSnapshot> {
     if (target.length !== 1) return unavailableLeumiLoans();
     await target[0].evaluate(e => (e as HTMLElement).click());
     await page.waitForSelector('#TableNIS1', { visible: true, timeout: 15000 });
+    // The bank displays the table shell before filling its asynchronous rows.
+    // Wait for populated data AND the populated total, not a fixed loan count.
+    // Missing/empty/changed source markup times out to unavailable, never no debt.
+    await page.waitForFunction(
+      () => {
+        const table = document.querySelector<HTMLTableElement>('#TableNIS1');
+        if (!table) return false;
+        const rows = Array.from(table.rows, row =>
+          Array.from(row.cells, cell =>
+            (cell.textContent || '').replace(/[\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, '').trim(),
+          ),
+        );
+        const header = rows.find(
+          row => row.includes('הלוואה') && row.includes('חשבון') && row.includes('יתרה משוערכת'),
+        );
+        if (!header) return false;
+        const total = rows.find(row => /^סה["״']*כ/.test(row[0] || ''));
+        if (!total || !total.slice(1).some(cell => /\d/.test(cell))) return false;
+        const data = rows.filter(row => row !== header && row !== total && row.some(cell => cell));
+        return (
+          data.length > 0 &&
+          data.every(row =>
+            ['הלוואה', 'חשבון', 'סכום הלוואה מקורי', 'נכון לתאריך', 'יתרה משוערכת'].every(label =>
+              /\d/.test(row[header.indexOf(label)] || ''),
+            ),
+          )
+        );
+      },
+      { timeout: 15000 },
+    );
     const rows = await page.$eval('#TableNIS1', table =>
       Array.from((table as HTMLTableElement).rows, row =>
         Array.from(row.cells, cell => (cell.textContent || '').trim()),
