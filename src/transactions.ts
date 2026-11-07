@@ -3,6 +3,7 @@ export type BankLoanDetails =
   | {
       status: 'reported';
       source: 'leumi-loan-detail';
+      detailSourceId: string;
       bankAsOf: string;
       principalBalance: number | null;
       remainingPayments: number | null;

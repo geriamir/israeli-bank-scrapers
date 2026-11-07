@@ -8,9 +8,10 @@ const summary = () =>
     ['הלוואה', 'חשבון', 'סכום הלוואה מקורי', 'תאריך סיום', 'נכון לתאריך', 'יתרה משוערכת'],
     ['בדיקה 8765-4/3', '876-12345/67', '54,321.00', '12/07/32', '03/04/28', '32,456.78'],
   ]);
+const binding = { sourceAccountRaw: '876-12345/67', linkIndex: '7', currentIndex: '7' };
 const rows = [
   ['חשבון:', '876-12345/67'],
-  ['מספר הלוואה:', '8765-4/3'],
+  ['מספר הלוואה:', '12345678'],
   ['נכון לתאריך:', '03/04/28'],
   ['תשלומים שנותרו:', '17'],
   ['יתרת קרן:', '32,100.05'],
@@ -23,10 +24,11 @@ const rows = [
 ];
 
 test('detail identity is checked and exact labels preserve remaining count, principal, rate precision and dates', () => {
-  const result = parseLeumiLoanDetails(rows, summary().loans[0].sourceId);
+  const result = parseLeumiLoanDetails(rows, binding);
   expect(result).toEqual({
     status: 'reported',
     source: 'leumi-loan-detail',
+    detailSourceId: expect.stringMatching(/^[a-f0-9]{64}$/),
     bankAsOf: '2028-04-03',
     principalBalance: 32100.05,
     remainingPayments: 17,
@@ -40,8 +42,8 @@ test('detail identity is checked and exact labels preserve remaining count, prin
   });
   expect(result).not.toHaveProperty('paidPayments');
   expect(result).not.toHaveProperty('totalPayments');
-  expect(parseLeumiLoanDetails(rows, 'a'.repeat(64)).status).toBe('unavailable');
-  expect(parseLeumiLoanDetails([...rows, rows[0]], summary().loans[0].sourceId).status).toBe('unavailable');
+  expect(parseLeumiLoanDetails(rows, { ...binding, currentIndex: '8' }).status).toBe('unavailable');
+  expect(parseLeumiLoanDetails([...rows, rows[0]], binding).status).toBe('unavailable');
 });
 
 test('zero is explicit, malformed/missing detail values and epoch placeholder remain unknown', () => {
@@ -57,7 +59,7 @@ test('zero is explicit, malformed/missing detail values and epoch placeholder re
             ? 'פריים + מרווח'
             : v,
   ]);
-  const result = parseLeumiLoanDetails(data, summary().loans[0].sourceId);
+  const result = parseLeumiLoanDetails(data, binding);
   expect(result).toMatchObject({
     principalBalance: 0,
     remainingPayments: 0,
@@ -68,7 +70,7 @@ test('zero is explicit, malformed/missing detail values and epoch placeholder re
   expect(
     parseLeumiLoanDetails(
       rows.filter(r => r[0] !== 'נכון לתאריך:'),
-      summary().loans[0].sourceId,
+      binding,
     ).status,
   ).toBe('unavailable');
 });
@@ -98,4 +100,52 @@ test('optional acquisition failures preserve summary and unsafe or cross-origin 
   page.$eval.mockRejectedValueOnce(new Error('synthetic acquisition failure'));
   await expect(readLeumiLoanDetails(page as unknown as Page, data)).resolves.toBeUndefined();
   expect(data.loans[0].revaluedBalance).toBe(32456.78);
+});
+
+test('unique explicit row links bind distinct detail numbers; duplicate indexes, reused identities and redirected indexes fail closed', async () => {
+  for (const scenario of ['valid', 'duplicate-index', 'duplicate-detail', 'redirect', 'wrong-account']) {
+    const header = ['הלוואה', 'חשבון', 'סכום הלוואה מקורי', 'תאריך סיום', 'נכון לתאריך', 'יתרה משוערכת'];
+    const first = ['בדיקה 8765-4/3', '876-12345/67', '54,321.00', '12/07/32', '03/04/28', '32,456.78'];
+    const second = ['בדיקה 8766-5/4', '876-12345/67', '23,456.00', '12/07/32', '03/04/28', '12,345.00'];
+    const data = parseLeumiLoans([header, first, second]);
+    let current = 'https://bank.example/summary';
+    const page = {
+      url: () => current,
+      $eval: jest.fn().mockResolvedValue([
+        { cells: header, links: [] },
+        { cells: first, links: ['https://bank.example/eBanking/LoanAndMortgages/DisplayLoanActivity.aspx?index=7'] },
+        {
+          cells: second,
+          links: [
+            `https://bank.example/eBanking/LoanAndMortgages/DisplayLoanActivity.aspx?index=${scenario === 'duplicate-index' ? '7' : '8'}`,
+          ],
+        },
+      ]),
+      goto: jest.fn((url: string) => {
+        current = scenario === 'redirect' ? url.replace(/index=\d+/, 'index=99') : url;
+        return Promise.resolve();
+      }),
+      waitForFunction: jest.fn().mockResolvedValue(undefined),
+      evaluate: jest.fn(() =>
+        Promise.resolve(
+          rows.map(([label, value]) => [
+            label,
+            label === 'מספר הלוואה:'
+              ? current.endsWith('index=7') || scenario === 'duplicate-detail'
+                ? '12345678'
+                : '87654321'
+              : label === 'חשבון:' && scenario === 'wrong-account'
+                ? '875-12345/67'
+                : value,
+          ]),
+        ),
+      ),
+    };
+    await readLeumiLoanDetails(page as unknown as Page, data);
+    expect(data.loans.map(l => l.details?.status)).toEqual(
+      scenario === 'valid' ? ['reported', 'reported'] : ['unavailable', 'unavailable'],
+    );
+    if (scenario === 'duplicate-index') expect(page.goto).not.toHaveBeenCalled();
+    expect(data.status).toBe('reported');
+  }
 });

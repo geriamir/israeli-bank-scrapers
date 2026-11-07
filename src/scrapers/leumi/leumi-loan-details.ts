@@ -12,7 +12,13 @@ const clean = (text: string) =>
     .replace(/\s+/g, ' ');
 
 // Exact observed source labels. Payment counts mean REMAINING, never already paid.
-export function parseLeumiLoanDetails(rows: string[][], expectedSourceId: string): BankLoanDetails {
+export interface LoanDetailBinding {
+  sourceAccountRaw: string;
+  linkIndex: string;
+  currentIndex: string | null;
+}
+
+export function parseLeumiLoanDetails(rows: string[][], binding: LoanDetailBinding): BankLoanDetails {
   const fields = new Map<string, string>();
   for (const row of rows) {
     if (row.length !== 2) continue;
@@ -23,11 +29,19 @@ export function parseLeumiLoanDetails(rows: string[][], expectedSourceId: string
   const value = (label: string) => fields.get(label) || '';
   const account = value('חשבון:');
   const reference = value('מספר הלוואה:');
-  if (!/^\d+-\d+\/\d+$/.test(account) || !/^\d+-\d+\/\d+$/.test(reference)) return unavailableLoanDetails();
-  const identity = createHash('sha256')
-    .update(JSON.stringify(['leumi-loan-summary', account, reference]))
+  // The detail's eight-digit bank number is NOT the formatted summary reference.
+  // Its relationship is the unique, captured bank row link, not guessed formatting.
+  if (
+    !/^\d+-\d+\/\d+$/.test(account) ||
+    account !== clean(binding.sourceAccountRaw) ||
+    !/^\d{8}$/.test(reference) ||
+    !/^\d+$/.test(binding.linkIndex) ||
+    binding.currentIndex !== binding.linkIndex
+  )
+    return unavailableLoanDetails();
+  const detailSourceId = createHash('sha256')
+    .update(JSON.stringify(['leumi-loan-detail', account, reference]))
     .digest('hex');
-  if (identity !== expectedSourceId) return unavailableLoanDetails();
   const date = (label: string): string | null => {
     const raw = value(label);
     // Observed placeholder on an inactive loan. This is not an actual payment date.
@@ -49,6 +63,7 @@ export function parseLeumiLoanDetails(rows: string[][], expectedSourceId: string
   return {
     status: 'reported',
     source: 'leumi-loan-detail',
+    detailSourceId,
     bankAsOf,
     principalBalance: amount('יתרת קרן:'),
     remainingPayments: /^\d+$/.test(count) && Number.isSafeInteger(Number(count)) ? Number(count) : null,
@@ -76,27 +91,37 @@ export async function readLeumiLoanDetails(page: Page, snapshot: BankLoanSnapsho
     );
     const header = source.find(row => row.cells.map(clean).includes('יתרה משוערכת'))?.cells;
     if (!header) return;
-    const targets = new Map<string, string>();
+    const targets = new Map<string, { url: string; index: string; account: string }>();
+    const indexCounts = new Map<string, number>();
     for (const row of source) {
       const parsed = parseLeumiLoans([header, row.cells]);
       if (parsed.status !== 'reported') continue;
       const links = row.links.filter(link => {
         try {
           const url = new URL(link);
-          return url.origin === origin && url.pathname === '/eBanking/LoanAndMortgages/DisplayLoanActivity.aspx';
+          return (
+            url.origin === origin &&
+            url.pathname === '/eBanking/LoanAndMortgages/DisplayLoanActivity.aspx' &&
+            [...url.searchParams.keys()].length === 1 &&
+            /^\d+$/.test(url.searchParams.get('index') || '')
+          );
         } catch {
           return false;
         }
       });
-      if (links.length === 1) targets.set(parsed.loans[0].sourceId, links[0]);
+      if (links.length === 1) {
+        const index = new URL(links[0]).searchParams.get('index')!;
+        targets.set(parsed.loans[0].sourceId, { url: links[0], index, account: parsed.loans[0].sourceAccountRaw! });
+        indexCounts.set(index, (indexCounts.get(index) || 0) + 1);
+      }
     }
     const deadline = Date.now() + 60000;
     // Bounded optional information reads. Zero revalued balance does not imply repaid.
     for (const loan of snapshot.loans.filter(l => l.revaluedBalance > 0).slice(0, 12)) {
       const target = targets.get(loan.sourceId);
-      if (!target || Date.now() >= deadline) continue;
+      if (!target || indexCounts.get(target.index) !== 1 || Date.now() >= deadline) continue;
       try {
-        await page.goto(target, {
+        await page.goto(target.url, {
           waitUntil: 'domcontentloaded',
           timeout: Math.max(1, Math.min(15000, deadline - Date.now())),
         });
@@ -131,11 +156,32 @@ export async function readLeumiLoanDetails(page: Page, snapshot: BankLoanSnapsho
               ),
             ),
         );
-        loan.details = parseLeumiLoanDetails(rows, loan.sourceId);
+        const current = new URL(page.url());
+        const currentIndex =
+          current.origin === origin &&
+          current.pathname === '/eBanking/LoanAndMortgages/DisplayLoanActivity.aspx' &&
+          [...current.searchParams.keys()].length === 1
+            ? current.searchParams.get('index')
+            : null;
+        loan.details = parseLeumiLoanDetails(rows, {
+          sourceAccountRaw: target.account,
+          linkIndex: target.index,
+          currentIndex,
+        });
       } catch {
         /* Optional detail failure never discards summary observations or transactions. */
       }
     }
+    // A reused detail bank number cannot be attributed to two summary loans.
+    const identities = new Map<string, typeof snapshot.loans>();
+    for (const loan of snapshot.loans)
+      if (loan.details?.status === 'reported') {
+        const list = identities.get(loan.details.detailSourceId) || [];
+        list.push(loan);
+        identities.set(loan.details.detailSourceId, list);
+      }
+    for (const list of identities.values())
+      if (list.length > 1) for (const loan of list) loan.details = unavailableLoanDetails();
   } catch {
     /* No URLs, errors, financial data or credentials are logged. */
   }
