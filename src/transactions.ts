@@ -1,3 +1,29 @@
+export interface BankLoanSnapshot {
+  status: 'reported' | 'unavailable';
+  source: 'leumi-loan-summary';
+  loans: Array<{
+    sourceId: string;
+    referenceLast4: string;
+    originalAmount: number;
+    revaluedBalance: number;
+    bankAsOf: string;
+    bankEndDate: string | null;
+  }>;
+}
+
+export interface CalCardDetails {
+  isDebit: boolean | null;
+  billingDay: number | null;
+  sharedFacility: {
+    identity: string;
+    issuerGroup: 'bankIssuedCards' | 'calIssuedCards';
+    limit: number | null;
+    available: number | null;
+    nextPayment: number | null;
+    nextPaymentDate: string | null;
+    source: 'cal-frame-status';
+  } | null;
+}
 export interface BankCreditFacility {
   status: 'reported' | 'unavailable';
   limit: number | null;
@@ -9,6 +35,7 @@ export interface BankCreditFacility {
 }
 
 export interface TransactionsAccount {
+  bankLoans?: BankLoanSnapshot;
   bankCreditFacility?: BankCreditFacility;
   accountNumber: string;
   balance?: number;
