@@ -273,10 +273,10 @@ describe('convertVoucher', () => {
     expect(transaction.memo).toBe('memo');
   });
 
-  test('leaves the category unset, since transactionDescription is the deal kind', () => {
+  test('keeps the deal kind as the category until the details replace it', () => {
     const transaction = convertVoucher({ ...voucher, transactionDescription: 'עסקאות רגילות' }, processedDateIso);
 
-    expect(transaction.category).toBeUndefined();
+    expect(transaction.category).toBe('עסקאות רגילות');
   });
 
   test('is an installment transaction only when both installment fields are set', () => {

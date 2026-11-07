@@ -40,26 +40,126 @@ describe('addTransactionDetails', () => {
     jest.mocked(fetchPostWithinPage).mockReset();
   });
 
-  test('takes the category from the details, asking once per merchant', async () => {
+  test('takes the category from the details, and stops asking once two charges of a merchant agree', async () => {
     jest.mocked(fetchPostWithinPage).mockResolvedValue(details('חניוני רכב'));
 
-    const txns = await run([settled('1', 'פנגו'), settled('2', 'פנגו'), settled('3', 'פנגו')]);
+    const txns = await run([settled('1', 'פנגו'), settled('2', 'פנגו'), settled('3', 'פנגו'), settled('4', 'פנגו')]);
 
-    expect(requestedVouchers()).toEqual(['1']);
-    expect(txns.map(txn => txn.category)).toEqual(['חניוני רכב', 'חניוני רכב', 'חניוני רכב']);
+    expect(requestedVouchers()).toEqual(['1', '2']);
+    expect(txns.map(txn => txn.category)).toEqual(['חניוני רכב', 'חניוני רכב', 'חניוני רכב', 'חניוני רכב']);
   });
 
-  test('uses and fills the given category cache', async () => {
-    jest.mocked(fetchPostWithinPage).mockResolvedValue(details('מסעדות'));
+  test('uses the given category cache once a call confirms the merchant, and adds a merchant once two of its charges agree', async () => {
+    jest.mocked(fetchPostWithinPage).mockResolvedValueOnce(details('חניוני רכב')).mockResolvedValue(details('מסעדות'));
     const cache = new Map([['פנגו', 'חניוני רכב']]);
 
-    const txns = await run([settled('1', 'פנגו'), settled('2', 'שגב')], {
+    const txns = await run(
+      [settled('1', 'פנגו'), settled('2', 'שגב'), settled('3', 'קפה'), settled('4', 'קפה'), settled('5', 'פנגו')],
+      { additionalTransactionInformationCategoryCache: cache },
+    );
+
+    expect(requestedVouchers()).toEqual(['1', '2', '3', '4']);
+    expect(txns.map(txn => txn.category)).toEqual(['חניוני רכב', 'מסעדות', 'מסעדות', 'מסעדות', 'חניוני רכב']);
+    expect(cache.has('שגב')).toBe(false);
+    expect(cache.get('קפה')).toBe('מסעדות');
+  });
+
+  test("doesn't cache a merchant whose charges disagree", async () => {
+    jest
+      .mocked(fetchPostWithinPage)
+      .mockResolvedValueOnce(details('מסעדות'))
+      .mockResolvedValueOnce(details('בתי קפה'))
+      .mockResolvedValueOnce(details('בתי קפה'));
+    const cache = new Map<string, string>();
+
+    await run([settled('1', 'קפה'), settled('2', 'קפה'), settled('3', 'קפה')], {
       additionalTransactionInformationCategoryCache: cache,
     });
 
-    expect(requestedVouchers()).toEqual(['2']);
-    expect(txns.map(txn => txn.category)).toEqual(['חניוני רכב', 'מסעדות']);
+    expect(requestedVouchers()).toEqual(['1', '2', '3']);
+    expect(cache.get('קפה')).toBe('בתי קפה');
+  });
+
+  test("a plain payment first doesn't hide a transfer app's later transfers", async () => {
+    jest
+      .mocked(fetchPostWithinPage)
+      .mockResolvedValueOnce(details('מחשבים ותוכנות'))
+      .mockResolvedValueOnce(details('מחשבים ותוכנות', { transferBeneficiary: 'רבקה דוד' }))
+      .mockResolvedValueOnce(details('מחשבים ותוכנות', { transferBeneficiary: 'יוסי כהן' }));
+    const cache = new Map<string, string>();
+
+    const txns = await run([settled('1', 'NEWPAY'), settled('2', 'NEWPAY'), settled('3', 'NEWPAY')], {
+      additionalTransactionInformationCategoryCache: cache,
+    });
+
+    expect(requestedVouchers()).toEqual(['1', '2', '3']);
+    expect(txns.map(txn => txn.memo)).toEqual(['', 'העברה ל: רבקה דוד', 'העברה ל: יוסי כהן']);
+    expect(cache.has('NEWPAY')).toBe(false);
+  });
+
+  test('a transfer app cached by an earlier scrape is dropped once its check shows a transfer', async () => {
+    jest
+      .mocked(fetchPostWithinPage)
+      .mockResolvedValueOnce(details('מחשבים ותוכנות', { transferBeneficiary: 'רבקה דוד' }))
+      .mockResolvedValueOnce(details('מחשבים ותוכנות', { transferBeneficiary: 'יוסי כהן' }));
+    const cache = new Map([['NEWPAY', 'מחשבים ותוכנות']]);
+
+    const txns = await run([settled('1', 'NEWPAY'), settled('2', 'NEWPAY')], {
+      additionalTransactionInformationCategoryCache: cache,
+    });
+
+    expect(requestedVouchers()).toEqual(['1', '2']);
+    expect(txns.map(txn => txn.memo)).toEqual(['העברה ל: רבקה דוד', 'העברה ל: יוסי כהן']);
+    expect(cache.has('NEWPAY')).toBe(false);
+  });
+
+  test('never caches the deal kind of a charge whose details have no business type', async () => {
+    jest.mocked(fetchPostWithinPage).mockResolvedValue(details(''));
+    const cache = new Map<string, string>();
+
+    const txns = await run(
+      [1, 2, 3].map(i => ({ ...settled(String(i), 'שגב'), category: 'עסקאות רגילות' })),
+      { additionalTransactionInformationCategoryCache: cache },
+    );
+
+    expect(requestedVouchers()).toEqual(['1', '2', '3']);
+    expect(txns.map(txn => txn.category)).toEqual(['עסקאות רגילות', 'עסקאות רגילות', 'עסקאות רגילות']);
+    expect(cache.has('שגב')).toBe(false);
+  });
+
+  test('learns again a cached merchant whose check gives another business type', async () => {
+    jest.mocked(fetchPostWithinPage).mockResolvedValue(details('מסעדות'));
+    const cache = new Map([['שגב', 'בתי קפה']]);
+
+    const txns = await run([settled('1', 'שגב'), settled('2', 'שגב'), settled('3', 'שגב')], {
+      additionalTransactionInformationCategoryCache: cache,
+    });
+
+    expect(requestedVouchers()).toEqual(['1', '2']);
+    expect(txns.map(txn => txn.category)).toEqual(['מסעדות', 'מסעדות', 'מסעדות']);
     expect(cache.get('שגב')).toBe('מסעדות');
+  });
+
+  test('drops a cached merchant whose check disagrees, if no second charge confirms the new type', async () => {
+    jest.mocked(fetchPostWithinPage).mockResolvedValue(details('מסעדות'));
+    const cache = new Map([['שגב', 'בתי קפה']]);
+
+    await run([settled('1', 'שגב')], { additionalTransactionInformationCategoryCache: cache });
+
+    expect(cache.has('שגב')).toBe(false);
+  });
+
+  test('tries a failed call once more at the end', async () => {
+    jest
+      .mocked(fetchPostWithinPage)
+      .mockResolvedValueOnce({ isSuccess: false, data: null })
+      .mockResolvedValueOnce(details('מסעדות'));
+    const known = { ...settled('1', 'ארומה'), additionalInformation: { isIsraelDeal: true } };
+
+    const txns = await run([known]);
+
+    expect(requestedVouchers()).toEqual(['1', '1']);
+    expect(txns[0].category).toBe('מסעדות');
   });
 
   test('asks for every transfer, since each names its own beneficiary', async () => {
@@ -135,7 +235,7 @@ describe('addTransactionDetails', () => {
     expect(txns[0].category).toBeUndefined();
   });
 
-  test("asks once, as the voucher's own kind of deal, when the voucher says", async () => {
+  test("asks only as the voucher's own kind of deal, also when trying again", async () => {
     jest.mocked(fetchPostWithinPage).mockResolvedValue({ isSuccess: false, data: null });
     const abroadInShekels = { ...settled('1', 'Booking'), additionalInformation: { isIsraelDeal: false } };
 
@@ -143,7 +243,7 @@ describe('addTransactionDetails', () => {
 
     expect(
       jest.mocked(fetchPostWithinPage).mock.calls.map(([, , body]) => (body as { isIsraelDeal: boolean }).isIsraelDeal),
-    ).toEqual([false]);
+    ).toEqual([false, false]);
   });
 
   test('asks again as the other kind of deal, and keeps the transaction when both fail', async () => {

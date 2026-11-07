@@ -288,8 +288,10 @@ export function convertVoucher(
     chargedCurrency: SHEKEL_CURRENCY,
     description: (voucher.businessName || '').trim(),
     memo: (voucher.moreInfo || '').trim(),
-    // `transactionDescription` is the deal kind ("עסקאות רגילות"), not a merchant category -
-    // the category only comes from GetTransactionDetails (see applyTransactionDetails).
+    // `transactionDescription` is only the deal kind ("עסקאות רגילות", "P2P כל היתר"), not a
+    // merchant category: GetTransactionDetails replaces it (see applyTransactionDetails). It stays
+    // for a charge whose details can't be read, and for transfers, which take no category from them.
+    category: voucher.transactionDescription?.trim() || undefined,
     installments,
     status: TransactionStatuses.Completed,
   };
