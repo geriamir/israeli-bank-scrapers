@@ -61,6 +61,7 @@ export function parseLeumiLoans(rows: string[][]): BankLoanSnapshot {
       revaluedBalance,
       bankAsOf,
       bankEndDate,
+      sourceAccountRaw: account,
     });
   }
   // An empty table alone is not affirmative evidence of no debt.
@@ -70,7 +71,7 @@ export function parseLeumiLoans(rows: string[][]): BankLoanSnapshot {
 // Only existing-information labels: the summary title is not necessarily a menu
 // link. The authenticated navigation exposes "הלוואות" instead. Never match a
 // substring that could select a new-loan application or repayment action.
-export async function readLeumiLoans(page: Page): Promise<BankLoanSnapshot> {
+export async function readLeumiLoans(page: Page, selectedCheckingAccount?: string): Promise<BankLoanSnapshot> {
   try {
     await page.waitForFunction(
       () =>
@@ -129,7 +130,18 @@ export async function readLeumiLoans(page: Page): Promise<BankLoanSnapshot> {
         Array.from(row.cells, cell => (cell.textContent || '').trim()),
       ),
     );
-    return parseLeumiLoans(rows);
+    const result = parseLeumiLoans(rows);
+    for (const loan of result.loans) {
+      // Binding is explicit source identity equality, never login/account-count or amount inference.
+      const digits = (s: string) => s.replace(/\D/g, '');
+      loan.sourceAccountNumber =
+        selectedCheckingAccount &&
+        loan.sourceAccountRaw &&
+        digits(loan.sourceAccountRaw) === digits(selectedCheckingAccount)
+          ? selectedCheckingAccount
+          : null;
+    }
+    return result;
   } catch {
     return unavailableLeumiLoans();
   }

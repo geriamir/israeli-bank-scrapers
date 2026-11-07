@@ -1,3 +1,20 @@
+export type BankLoanDetails =
+  | { status: 'unavailable'; source: 'leumi-loan-detail' }
+  | {
+      status: 'reported';
+      source: 'leumi-loan-detail';
+      bankAsOf: string;
+      principalBalance: number | null;
+      remainingPayments: number | null;
+      nextPaymentAmount: number | null;
+      nextPaymentDate: string | null;
+      interestRatePercent: number | null;
+      interestRateText: string | null;
+      indexation: string | null;
+      bankStartDate: string | null;
+      bankEndDate: string | null;
+    };
+
 export interface BankLoanSnapshot {
   status: 'reported' | 'unavailable';
   source: 'leumi-loan-summary';
@@ -8,6 +25,9 @@ export interface BankLoanSnapshot {
     revaluedBalance: number;
     bankAsOf: string;
     bankEndDate: string | null;
+    sourceAccountRaw?: string;
+    sourceAccountNumber?: string | null;
+    details?: BankLoanDetails;
   }>;
 }
 

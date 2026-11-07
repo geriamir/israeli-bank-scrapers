@@ -14,6 +14,7 @@ import { fetchInvestmentAccounts } from './leumi-investments';
 
 import { readLeumiFacility, unavailableLeumiFacility } from './leumi-credit-facility';
 import { readLeumiLoans, unavailableLeumiLoans } from './leumi-loans';
+import { readLeumiLoanDetails } from './leumi-loan-details';
 
 const debug = getDebug('leumi');
 const BASE_URL = 'https://hb2.bankleumi.co.il';
@@ -385,8 +386,10 @@ class LeumiScraper extends BaseScraperWithBrowser<ScraperSpecificCredentials> {
       }
     } else for (const account of checking) account.bankCreditFacility = unavailableLeumiFacility();
 
-    if (checking.length === 1) checking[0].bankLoans = await readLeumiLoans(this.page);
-    else for (const account of checking) account.bankLoans = unavailableLeumiLoans();
+    if (checking.length === 1) {
+      checking[0].bankLoans = await readLeumiLoans(this.page, checking[0].accountNumber);
+      await readLeumiLoanDetails(this.page, checking[0].bankLoans);
+    } else for (const account of checking) account.bankLoans = unavailableLeumiLoans();
 
     return {
       success: true,

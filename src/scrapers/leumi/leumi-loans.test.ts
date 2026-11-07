@@ -29,14 +29,17 @@ test('preserves exact bank balance semantics and dates, including zero rows with
     bankEndDate: '2033-08-12',
   });
   expect(result.loans[1].revaluedBalance).toBe(0);
-  expect(Object.keys(result.loans[0]).sort()).toEqual([
-    'bankAsOf',
-    'bankEndDate',
-    'originalAmount',
-    'referenceLast4',
-    'revaluedBalance',
-    'sourceId',
-  ]);
+  expect(Object.keys(result.loans[0]).sort()).toEqual(
+    [
+      'bankAsOf',
+      'bankEndDate',
+      'originalAmount',
+      'referenceLast4',
+      'revaluedBalance',
+      'sourceId',
+      'sourceAccountRaw',
+    ].sort(),
+  );
 });
 test('identity survives row reordering, label and amount/date changes, but differs by bank account and loan reference', () => {
   const id = parseLeumiLoans(rows).loans[0].sourceId;
@@ -71,12 +74,14 @@ function navigationPage(labels: Array<{ text: string; visible?: boolean }>) {
     waitForFunction: jest.fn().mockResolvedValue(undefined),
     $$: jest.fn().mockResolvedValue(
       labels.map(({ text, visible = true }) => ({
-        evaluate: async (fn: (e: unknown) => unknown) =>
-          fn({
-            textContent: text,
-            getBoundingClientRect: () => ({ width: visible ? 20 : 0, height: visible ? 10 : 0 }),
-            click: () => clicked.push(text),
-          }),
+        evaluate: (fn: (e: unknown) => unknown) =>
+          Promise.resolve(
+            fn({
+              textContent: text,
+              getBoundingClientRect: () => ({ width: visible ? 20 : 0, height: visible ? 10 : 0 }),
+              click: () => clicked.push(text),
+            }),
+          ),
       })),
     ),
     waitForSelector: jest.fn().mockResolvedValue(undefined),
@@ -144,4 +149,16 @@ test('readiness timeout remains unavailable and never reads partial balances', a
   page.waitForFunction.mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error('synthetic timeout'));
   expect((await readLeumiLoans(page as unknown as Page)).status).toBe('unavailable');
   expect(page.$eval).not.toHaveBeenCalled();
+});
+
+test('source binding requires actual source-column equality with selected checking identity', async () => {
+  for (const [account, expected] of [
+    ['9995432176', '9995432176'],
+    ['9985432176', null],
+  ]) {
+    const { page } = navigationPage([{ text: 'הלוואות' }]);
+    const result = await readLeumiLoans(page as unknown as Page, account || undefined);
+    expect(result.loans[0].sourceAccountRaw).toBe('999-54321/76');
+    expect(result.loans[0].sourceAccountNumber).toBe(expected);
+  }
 });
