@@ -113,6 +113,42 @@ describe('addTransactionDetails', () => {
     expect(cache.has('NEWPAY')).toBe(false);
   });
 
+  test('never caches the deal kind of a charge whose details have no business type', async () => {
+    jest.mocked(fetchPostWithinPage).mockResolvedValue(details(''));
+    const cache = new Map<string, string>();
+
+    const txns = await run(
+      [1, 2, 3].map(i => ({ ...settled(String(i), 'שגב'), category: 'עסקאות רגילות' })),
+      { additionalTransactionInformationCategoryCache: cache },
+    );
+
+    expect(requestedVouchers()).toEqual(['1', '2', '3']);
+    expect(txns.map(txn => txn.category)).toEqual(['עסקאות רגילות', 'עסקאות רגילות', 'עסקאות רגילות']);
+    expect(cache.has('שגב')).toBe(false);
+  });
+
+  test('learns again a cached merchant whose check gives another business type', async () => {
+    jest.mocked(fetchPostWithinPage).mockResolvedValue(details('מסעדות'));
+    const cache = new Map([['שגב', 'בתי קפה']]);
+
+    const txns = await run([settled('1', 'שגב'), settled('2', 'שגב'), settled('3', 'שגב')], {
+      additionalTransactionInformationCategoryCache: cache,
+    });
+
+    expect(requestedVouchers()).toEqual(['1', '2']);
+    expect(txns.map(txn => txn.category)).toEqual(['מסעדות', 'מסעדות', 'מסעדות']);
+    expect(cache.get('שגב')).toBe('מסעדות');
+  });
+
+  test('drops a cached merchant whose check disagrees, if no second charge confirms the new type', async () => {
+    jest.mocked(fetchPostWithinPage).mockResolvedValue(details('מסעדות'));
+    const cache = new Map([['שגב', 'בתי קפה']]);
+
+    await run([settled('1', 'שגב')], { additionalTransactionInformationCategoryCache: cache });
+
+    expect(cache.has('שגב')).toBe(false);
+  });
+
   test('tries a failed call once more at the end', async () => {
     jest
       .mocked(fetchPostWithinPage)

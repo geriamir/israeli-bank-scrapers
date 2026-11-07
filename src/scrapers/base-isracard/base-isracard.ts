@@ -21,6 +21,7 @@ import {
   getCardBalance,
   getCardBalanceDate,
   getCardFrame,
+  getDetailsCategory,
   getIsIsraelDeal,
   isApprovedTransactionSettled,
   isTransferDetails,
@@ -226,7 +227,8 @@ export async function addTransactionDetails(
   const agreeing = new Map<string, { category: string; count: number }>();
   // A merchant cached by an earlier scrape gets one details call per scrape before the cache serves
   // its other charges, so a transfer app cached by mistake is caught the first time that call shows
-  // a transfer, and dropped from the cache.
+  // a transfer, and dropped from the cache - and a merchant whose business type changed is dropped
+  // too, to be learned again from two agreeing charges.
   const checked = new Set<string>();
 
   const detailed = new Map<Transaction, Transaction>();
@@ -250,13 +252,22 @@ export async function addTransactionDetails(
         transferMerchants.add(txn.description);
         agreeing.delete(txn.description);
         cache.delete(txn.description);
-      } else if (result.category && cacheable(txn)) {
+      } else if (cacheable(txn)) {
+        // Only a business type from the details is a merchant's category: the deal kind the list
+        // gave (e.g. regular deals) stays on the charge but is never cached
+        const category = getDetailsCategory(details);
+        if (!category) {
+          return;
+        }
+        if (cache.has(txn.description) && cache.get(txn.description) !== category) {
+          cache.delete(txn.description);
+        }
         checked.add(txn.description);
         const seen = agreeing.get(txn.description);
-        const count = seen?.category === result.category ? seen.count + 1 : 1;
-        agreeing.set(txn.description, { category: result.category, count });
+        const count = seen?.category === category ? seen.count + 1 : 1;
+        agreeing.set(txn.description, { category, count });
         if (count >= AGREEING_CHARGES_TO_CACHE) {
-          cache.set(txn.description, result.category);
+          cache.set(txn.description, category);
         }
       }
     } catch (e) {
