@@ -64,3 +64,50 @@ test('optional loan page failure does not reject transaction collection', async 
   const page = { $$: jest.fn().mockRejectedValue(new Error('synthetic optional page failure')) };
   await expect(readLeumiLoans(page as unknown as Page)).resolves.toMatchObject({ status: 'unavailable', loans: [] });
 });
+
+function navigationPage(labels: Array<{ text: string; visible?: boolean }>) {
+  const clicked: string[] = [];
+  const page = {
+    waitForFunction: jest.fn().mockResolvedValue(undefined),
+    $$: jest.fn().mockResolvedValue(
+      labels.map(({ text, visible = true }) => ({
+        evaluate: async (fn: (e: unknown) => unknown) =>
+          fn({
+            textContent: text,
+            getBoundingClientRect: () => ({ width: visible ? 20 : 0, height: visible ? 10 : 0 }),
+            click: () => clicked.push(text),
+          }),
+      })),
+    ),
+    waitForSelector: jest.fn().mockResolvedValue(undefined),
+    $eval: jest.fn().mockResolvedValue(rows),
+  };
+  return { page, clicked };
+}
+
+test('normal-flow Loans menu opens summary even when summary exists only as a page heading', async () => {
+  const { page, clicked } = navigationPage([
+    { text: 'הלוואות' },
+    { text: 'הלוואות', visible: false },
+    { text: 'הלוואה חדשה' },
+    { text: 'בקשת הלוואה' },
+    { text: 'פירעון הלוואה' },
+  ]);
+  expect((await readLeumiLoans(page as unknown as Page)).status).toBe('reported');
+  expect(clicked).toEqual(['הלוואות']);
+  expect(page.waitForSelector).toHaveBeenCalledWith('#TableNIS1', { visible: true, timeout: 15000 });
+});
+
+test('exact visible summary link remains supported and ambiguous menus never click', async () => {
+  const summary = navigationPage([{ text: 'ריכוז הלוואות' }, { text: 'הלוואות' }]);
+  expect((await readLeumiLoans(summary.page as unknown as Page)).status).toBe('reported');
+  expect(summary.clicked).toEqual(['ריכוז הלוואות']);
+  for (const labels of [
+    [{ text: 'הלוואות' }, { text: 'הלוואות' }],
+    [{ text: 'הלוואה חדשה' }, { text: 'הקמת הלוואה' }, { text: 'הלוואות וערבויות' }],
+  ]) {
+    const { page, clicked } = navigationPage(labels);
+    expect((await readLeumiLoans(page as unknown as Page)).status).toBe('unavailable');
+    expect(clicked).toEqual([]);
+  }
+});

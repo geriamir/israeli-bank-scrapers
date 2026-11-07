@@ -67,14 +67,32 @@ export function parseLeumiLoans(rows: string[][]): BankLoanSnapshot {
   return loans.length ? { status: 'reported', source: SOURCE, loans } : unavailableLeumiLoans();
 }
 
+// Only existing-information labels: the summary title is not necessarily a menu
+// link. The authenticated navigation exposes "הלוואות" instead. Never match a
+// substring that could select a new-loan application or repayment action.
 export async function readLeumiLoans(page: Page): Promise<BankLoanSnapshot> {
   try {
-    const links = [];
+    await page.waitForFunction(
+      () =>
+        [...document.querySelectorAll('a')].some(
+          a =>
+            ['ריכוז הלוואות', 'הלוואות'].includes((a.textContent || '').trim()) &&
+            a.getBoundingClientRect().width > 0 &&
+            a.getBoundingClientRect().height > 0,
+        ),
+      { timeout: 15000 },
+    );
+    const links = { summary: [], menu: [] } as Record<'summary' | 'menu', Awaited<ReturnType<Page['$$']>>>;
     for (const handle of await page.$$('a')) {
-      if (await handle.evaluate(e => (e.textContent || '').trim() === 'ריכוז הלוואות')) links.push(handle);
+      const label = await handle.evaluate(e =>
+        e.getBoundingClientRect().width > 0 && e.getBoundingClientRect().height > 0 ? (e.textContent || '').trim() : '',
+      );
+      if (label === 'ריכוז הלוואות') links.summary.push(handle);
+      if (label === 'הלוואות') links.menu.push(handle);
     }
-    if (links.length !== 1) return unavailableLeumiLoans();
-    await links[0].evaluate(e => (e as HTMLElement).click());
+    const target = links.summary.length ? links.summary : links.menu;
+    if (target.length !== 1) return unavailableLeumiLoans();
+    await target[0].evaluate(e => (e as HTMLElement).click());
     await page.waitForSelector('#TableNIS1', { visible: true, timeout: 15000 });
     const rows = await page.$eval('#TableNIS1', table =>
       Array.from((table as HTMLTableElement).rows, row =>
