@@ -15,6 +15,7 @@ import { fetchInvestmentAccounts } from './leumi-investments';
 import { readLeumiFacility, unavailableLeumiFacility } from './leumi-credit-facility';
 import { readLeumiLoans, unavailableLeumiLoans } from './leumi-loans';
 import { readLeumiLoanDetails } from './leumi-loan-details';
+import { fetchLeumiMortgages } from './leumi-mortgages';
 
 const debug = getDebug('leumi');
 const BASE_URL = 'https://hb2.bankleumi.co.il';
@@ -390,6 +391,19 @@ class LeumiScraper extends BaseScraperWithBrowser<ScraperSpecificCredentials> {
       checking[0].bankLoans = await readLeumiLoans(this.page, checking[0].accountNumber);
       await readLeumiLoanDetails(this.page, checking[0].bankLoans);
     } else for (const account of checking) account.bankLoans = unavailableLeumiLoans();
+
+    // Mortgages are listed for the customer, not per account: the snapshot goes on the
+    // checking account the first mortgage is paid from, else on the first checking account.
+    if (checking.length) {
+      const mortgages = await fetchLeumiMortgages(this.page);
+      const paidFrom = mortgages.mortgages[0]?.paidFromAccounts ?? [];
+      const carrier =
+        checking.find(account => {
+          const accountDigits = account.accountNumber.replace(/\D/g, '');
+          return !!accountDigits && paidFrom.some(number => number.endsWith(accountDigits));
+        }) ?? checking[0];
+      carrier.bankMortgages = mortgages;
+    }
 
     return {
       success: true,
