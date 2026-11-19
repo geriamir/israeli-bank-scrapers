@@ -32,19 +32,6 @@ export interface BankLoanSnapshot {
   }>;
 }
 
-export interface CalCardDetails {
-  isDebit: boolean | null;
-  billingDay: number | null;
-  sharedFacility: {
-    identity: string;
-    issuerGroup: 'bankIssuedCards' | 'calIssuedCards';
-    limit: number | null;
-    available: number | null;
-    nextPayment: number | null;
-    nextPaymentDate: string | null;
-    source: 'cal-frame-status';
-  } | null;
-}
 export interface BankCreditFacility {
   status: 'reported' | 'unavailable';
   limit: number | null;
