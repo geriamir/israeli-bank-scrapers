@@ -12,6 +12,11 @@ import { type ScraperOptions, type ScraperScrapingResult } from '../interface';
 import { fetchForeignCurrencyAccounts } from './leumi-forex';
 import { fetchInvestmentAccounts } from './leumi-investments';
 
+import { readLeumiFacility, unavailableLeumiFacility } from './leumi-credit-facility';
+import { readLeumiLoans, unavailableLeumiLoans } from './leumi-loans';
+import { readLeumiLoanDetails } from './leumi-loan-details';
+import { fetchLeumiMortgages } from './leumi-mortgages';
+
 const debug = getDebug('leumi');
 const BASE_URL = 'https://hb2.bankleumi.co.il';
 const LOGIN_URL = 'https://www.leumi.co.il/he';
@@ -357,6 +362,7 @@ class LeumiScraper extends BaseScraperWithBrowser<ScraperSpecificCredentials> {
     const startMoment = moment.max(minimumStartMoment, moment(startDate));
 
     const accounts = await fetchRegularAccounts(this, this.page, startMoment, this.options);
+    const checking = [...accounts];
     const savingsAccounts = await fetchSavingsAccounts(this.page, accounts);
     accounts.push(...savingsAccounts);
 
@@ -365,6 +371,39 @@ class LeumiScraper extends BaseScraperWithBrowser<ScraperSpecificCredentials> {
 
     const investmentAccounts = await fetchInvestmentAccounts(this.page, startMoment, this.options);
     accounts.push(...investmentAccounts);
+
+    // Optional facility navigation runs only after all transaction collection.
+    // Session-selected account binding is validated only for a sole checking account.
+    if (checking.length === 1) {
+      try {
+        await this.page.goto(`${BASE_URL}/eBanking/SO/SPA.aspx#/ts/BusinessAccountTrx?WidgetPar=1`);
+        await this.page.waitForFunction(
+          () => [...document.querySelectorAll('a')].some(a => (a.textContent || '').trim() === 'פירוט מסגרות אשראי'),
+          { timeout: 15000 },
+        );
+        checking[0].bankCreditFacility = await readLeumiFacility(this.page);
+      } catch {
+        checking[0].bankCreditFacility = unavailableLeumiFacility();
+      }
+    } else for (const account of checking) account.bankCreditFacility = unavailableLeumiFacility();
+
+    if (checking.length === 1) {
+      checking[0].bankLoans = await readLeumiLoans(this.page, checking[0].accountNumber);
+      await readLeumiLoanDetails(this.page, checking[0].bankLoans);
+    } else for (const account of checking) account.bankLoans = unavailableLeumiLoans();
+
+    // Mortgages are listed for the customer, not per account: the snapshot goes on the
+    // checking account the first mortgage is paid from, else on the first checking account.
+    if (checking.length) {
+      const mortgages = await fetchLeumiMortgages(this.page);
+      const paidFrom = mortgages.mortgages[0]?.paidFromAccounts ?? [];
+      const carrier =
+        checking.find(account => {
+          const accountDigits = account.accountNumber.replace(/\D/g, '');
+          return !!accountDigits && paidFrom.some(number => number.endsWith(accountDigits));
+        }) ?? checking[0];
+      carrier.bankMortgages = mortgages;
+    }
 
     return {
       success: true,
