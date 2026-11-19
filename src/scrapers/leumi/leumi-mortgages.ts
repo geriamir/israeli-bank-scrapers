@@ -47,6 +47,7 @@ export interface LeumiLoanInfoResponse {
       loanCreditDate?: string | null;
       calculateEndDate?: string | null;
       clearingBalance?: number | null;
+      commissionFreeBalance?: number | null;
       fundBalance?: number | null;
       linkageEstimatedBalance?: number | null;
       loanAmount?: number | null;
@@ -115,6 +116,7 @@ export function parseLeumiMortgageTrack(item: LoanItem): BankMortgageTrack | nul
     name: text(item.productName) ?? trackId,
     originalAmount: num(item.loanAmount),
     payoffBalance: num(item.clearingBalance),
+    balanceWithoutFees: num(item.commissionFreeBalance),
     principalBalance: num(item.fundBalance),
     linkageBalance: num(item.linkageEstimatedBalance),
     annualInterestPercent: num(item.annualInterestPercent),
