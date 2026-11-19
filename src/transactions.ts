@@ -1,4 +1,15 @@
+export interface BankCreditFacility {
+  status: 'reported' | 'unavailable';
+  limit: number | null;
+  temporaryLimit: number | null;
+  used: number | null;
+  remainingCredit: number | null;
+  asOf: string | null;
+  source: 'mizrahi-credit-modal' | 'leumi-credit-table';
+}
+
 export interface TransactionsAccount {
+  bankCreditFacility?: BankCreditFacility;
   accountNumber: string;
   balance?: number;
   balanceDate?: string;
