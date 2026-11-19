@@ -51,6 +51,7 @@ const track = (overrides: object) => ({
   loanCreditDate: '22.03.20',
   calculateEndDate: '15.04.37',
   clearingBalance: 300000,
+  commissionFreeBalance: 300000,
   fundBalance: 299950,
   linkageEstimatedBalance: 0,
   loanAmount: 500000,
@@ -76,6 +77,8 @@ const loanInfo = (): LeumiLoanInfoResponse => ({
         loanId: '02',
         annualInterestPercent: 4.2,
         calculateEndDate: '15.04.50',
+        clearingBalance: 200304.13,
+        commissionFreeBalance: 200000,
         linkageEstimatedBalance: 29000.15,
         anchorSpreadRate: 'עוגן + % 2.30',
         percentChgDate: '2030-04-15T00:00:00',
@@ -159,6 +162,7 @@ describe('parseLeumiLoanInfo', () => {
       name: 'ריבית קבועה לא צמודה',
       originalAmount: 500000,
       payoffBalance: 300000,
+      balanceWithoutFees: 300000,
       principalBalance: 299950,
       linkageBalance: 0,
       annualInterestPercent: 2.46,
@@ -178,6 +182,8 @@ describe('parseLeumiLoanInfo', () => {
       rateAnchorText: 'עוגן + % 2.30',
       nextRateChangeDate: '2030-04-15',
       linkageBalance: 29000.15,
+      payoffBalance: 200304.13,
+      balanceWithoutFees: 200000,
     });
     expect(result.tracks[2]).toMatchObject({ interestType: 'variable', cpiLinked: false });
     expect(result.recentPayments).toEqual([

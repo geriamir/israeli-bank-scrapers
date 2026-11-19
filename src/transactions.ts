@@ -39,6 +39,10 @@ export interface BankMortgageTrack {
   originalAmount: number | null;
   // What it would take to repay the track today, early-repayment fees included.
   payoffBalance: number | null;
+  // What is owed on the track without fees: principal, CPI linkage and the interest
+  // accrued since the last payment. The tracks' add up to the mortgage's payoff
+  // balance less its early-repayment fee.
+  balanceWithoutFees: number | null;
   // Principal still owed, before CPI linkage and fees.
   principalBalance: number | null;
   // How much CPI linkage has added to the principal (0 for an unlinked track).
